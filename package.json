@@ -1,0 +1,23 @@
+{
+  "name": "routing-ai-agent",
+  "version": "1.0.0",
+  "description": "AI Routing Agent with modular skills for Salesforce route optimization",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsforce": "^3.6.3",
+    "jsonwebtoken": "^9.0.3",
+    "winston": "^3.17.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

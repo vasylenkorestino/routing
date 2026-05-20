@@ -1,0 +1,14 @@
+/** Returns today's date in YYYY-MM-DD using America/New_York timezone */
+export const getTodayET = () => {
+  const now = new Date();
+  return now
+    .toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+    .slice(0, 10); // en-CA gives YYYY-MM-DD natively
+};
+
+/** Converts a YYYY-MM-DD string to MM/DD/YYYY display format */
+export const formatDate = (dateStr) => {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-');
+  return `${m}/${d}/${y}`;
+};
