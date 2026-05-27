@@ -93,7 +93,8 @@ export default function RouteEditor() {
     setServiceDate(route.Service_Date__c || '');
     setStartLoc(route.Service_Location_Start__c || '');
     setEndLoc(route.Service_Location_End__c || '');
-    setWaypoints(stops.map((p) => ({ ...p })));
+    const sorted = [...stops].sort((a, b) => (a.Priority__c ?? 9999) - (b.Priority__c ?? 9999));
+    setWaypoints(sorted.map((p) => ({ ...p })));
     setExpandedIdx(null);
   }, [route]);
 
