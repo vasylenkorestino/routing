@@ -65,6 +65,8 @@ export default function RouteCard({ route }) {
   if (!route) return null;
 
   const color = route._color ?? '#2563eb';
+  const routeCompleted = !!route.Driver_Completed__c;
+  const completionInProgress = route.CompletionStatus__c === 'In Progress';
 
   return (
     <div className="flex flex-col gap-2.5 p-4 bg-surface border border-border rounded-xl shadow-sm relative">
@@ -86,12 +88,29 @@ export default function RouteCard({ route }) {
         {route.isAI__c && (
           <span className="inline-flex items-center gap-1 text-[10px] font-bold text-white bg-ai rounded-full px-2 py-0.5">✦ AI</span>
         )}
-        <button
-          className="h-7 px-3 rounded-lg border border-success/40 text-success text-[11px] font-medium hover:bg-success-bg transition shrink-0"
-          onClick={() => openModal('isComplete')}
-        >
-          Complete
-        </button>
+        {routeCompleted ? (
+          <span
+            className="inline-flex items-center gap-1 h-7 px-3 rounded-lg bg-success-bg border border-success/30 text-success text-[11px] font-semibold shrink-0"
+            title={route.Comment__c || 'Route is already completed'}
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            Route Completed
+          </span>
+        ) : completionInProgress ? (
+          <span className="inline-flex items-center gap-1 h-7 px-3 rounded-lg bg-warning-bg border border-warning/30 text-warning text-[11px] font-semibold shrink-0">
+            <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
+            Completing…
+          </span>
+        ) : (
+          <button
+            className="h-7 px-3 rounded-lg border border-success/40 text-success text-[11px] font-medium hover:bg-success-bg transition shrink-0"
+            onClick={() => openModal('isComplete')}
+          >
+            Complete
+          </button>
+        )}
       </div>
 
       {/* Driver + Date row */}
@@ -120,21 +139,31 @@ export default function RouteCard({ route }) {
         ))}
       </div>
 
-      {/* Actions */}
-      <div className="flex gap-1.5 flex-wrap ml-10">
-        <button className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-hover transition" onClick={() => openModal('isEdit')}>Edit</button>
-        <button className="h-7 px-3 rounded-lg bg-ai text-white text-[11px] font-medium hover:bg-ai-hover transition" onClick={handleOptimize} disabled={optimizing}>Optimize</button>
-        <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => openModal('isCombine')}>Combine</button>
-        <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => openModal('isSplit')}>Split</button>
-        <button className="h-7 px-3 rounded-lg bg-ai text-white text-[11px] font-medium hover:bg-ai-hover transition flex items-center gap-1" onClick={() => openModal('isAIEnhance')}>
-          <span className="text-[9px]">✦</span> AI Enhance
-        </button>
-      </div>
+      {/* Actions — disabled once the route is completed (matches LWC routingApplication.routeCompleted) */}
+      {!routeCompleted && (
+        <>
+          <div className="flex gap-1.5 flex-wrap ml-10">
+            <button className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-hover transition" onClick={() => openModal('isEdit')}>Edit</button>
+            <button className="h-7 px-3 rounded-lg bg-ai text-white text-[11px] font-medium hover:bg-ai-hover transition" onClick={handleOptimize} disabled={optimizing}>Optimize</button>
+            <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => openModal('isCombine')}>Combine</button>
+            <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => openModal('isSplit')}>Split</button>
+            <button className="h-7 px-3 rounded-lg bg-ai text-white text-[11px] font-medium hover:bg-ai-hover transition flex items-center gap-1" onClick={() => openModal('isAIEnhance')}>
+              <span className="text-[9px]">✦</span> AI Enhance
+            </button>
+          </div>
 
-      {/* Add account / ticket */}
-      <div className="ml-10">
-        <AccountTicketSearch mode="add" />
-      </div>
+          <div className="ml-10">
+            <AccountTicketSearch mode="add" />
+          </div>
+        </>
+      )}
+
+      {routeCompleted && route.Comment__c && (
+        <div className="ml-10 text-xs text-txt-secondary bg-bg rounded-lg px-3 py-2 border border-border">
+          <span className="font-medium text-txt-secondary">Note: </span>
+          {route.Comment__c}
+        </div>
+      )}
     </div>
   );
 }
