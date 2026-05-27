@@ -33,14 +33,17 @@ export default function RouteDataTable({ points: rawPoints = [], onSelectPoint }
 }
 
 const COLS = [
-  { key: '#', width: 40, align: 'left' },
-  { key: 'Location', width: 200 },
-  { key: 'Address', width: 220 },
-  { key: 'Type', width: 70 },
-  { key: 'Last Gal.', width: 80, align: 'right' },
-  { key: 'Notes', width: 160 },
-  { key: 'Customer Note', width: 160 },
-  { key: 'Status', width: 100 },
+  { key: '#', width: 40 },
+  { key: 'Location', width: 180 },
+  { key: 'Service Location', width: 190 },
+  { key: 'Type', width: 60, align: 'center' },
+  { key: 'Last Serviced', width: 100, align: 'center' },
+  { key: 'Last Gal.', width: 75, align: 'right' },
+  { key: 'Gallons', width: 70, align: 'right' },
+  { key: 'Special Instructions', width: 160 },
+  { key: 'Customer Note', width: 140 },
+  { key: 'Driver Note', width: 140 },
+  { key: 'Status', width: 105, align: 'center' },
   { key: '', width: 48, align: 'center' },
 ];
 
@@ -54,6 +57,36 @@ const SERVICE_TYPE_CODES = {
 function shortServiceType(value) {
   if (!value) return '';
   return SERVICE_TYPE_CODES[value] || value.slice(0, 3).toUpperCase();
+}
+
+/** Formats a Salesforce date string (YYYY-MM-DD) for display. */
+function formatDate(value) {
+  if (!value) return '';
+  try {
+    const d = new Date(`${value}T00:00:00Z`);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Returns display label + Tailwind classes for a Route__c.Status__c value.
+ * - 'Driver Complete' / 'Completed' → "Complete" in green
+ * - 'Passed' → grey muted ("inactive/unserviced")
+ * - 'Skipped' → warning yellow
+ * - others → neutral
+ */
+function statusBadge(raw) {
+  const s = raw || '';
+  if (s === 'Driver Complete' || s === 'Complete' || s === 'Completed') {
+    return { label: 'Complete', cls: 'bg-success-bg text-success border border-success/20' };
+  }
+  if (s === 'Passed') return { label: 'Passed', cls: 'bg-bg text-txt-secondary border border-border' };
+  if (s === 'Skipped') return { label: 'Skipped', cls: 'bg-warning-bg text-warning border border-warning/20' };
+  if (!s) return { label: 'New', cls: 'bg-bg text-txt-secondary border border-border' };
+  return { label: s, cls: 'bg-bg text-txt-secondary border border-border' };
 }
 
 function TableView({ points, onSelectPoint }) {
@@ -86,6 +119,8 @@ function TableView({ points, onSelectPoint }) {
           {points.map((pt, idx) => {
             const fullServiceType = pt.ServiceType__c || '';
             const codeServiceType = shortServiceType(fullServiceType);
+            const lastServiced = formatDate(pt.Last_Route_Serviced_Date__c);
+            const status = statusBadge(pt.Status__c);
             return (
               <tr key={pt.Id || idx} className="hover:bg-primary-light/40 cursor-pointer transition-colors" onClick={() => onSelectPoint?.(pt)}>
                 <td className="px-2.5 py-2 text-txt tabular-nums">{pt.Priority__c ?? idx + 1}</td>
@@ -111,22 +146,27 @@ function TableView({ points, onSelectPoint }) {
                 <Cell value={pt.Container_Address__c}>
                   <span className="truncate text-txt">{pt.Container_Address__c || '—'}</span>
                 </Cell>
-                <Cell value={fullServiceType}>
-                  <span className="truncate text-txt font-mono text-[12px]" title={fullServiceType}>{codeServiceType || '—'}</span>
-                </Cell>
+                <td className="px-2.5 py-2 text-center" title={fullServiceType}>
+                  <span className="font-mono text-[12px] font-semibold text-txt">{codeServiceType || '—'}</span>
+                </td>
+                <td className="px-2.5 py-2 text-center text-[12px] text-txt-secondary tabular-nums" title={pt.Last_Route_Serviced_Date__c || ''}>
+                  {lastServiced || '—'}
+                </td>
                 <td className="px-2.5 py-2 text-txt tabular-nums text-right">{pt.LastGallonsCollected__c ?? '—'}</td>
+                <td className="px-2.5 py-2 text-txt tabular-nums text-right font-semibold">{pt.Gallons_Collected__c ?? '—'}</td>
                 <Cell value={pt.Notes__c} className="text-xs text-txt-secondary">
                   <span className="truncate">{pt.Notes__c || '—'}</span>
                 </Cell>
                 <Cell value={pt.Notes2__c} className="text-xs text-txt-secondary">
                   <span className="truncate">{pt.Notes2__c || '—'}</span>
                 </Cell>
-                <td className="px-2.5 py-2">
-                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                    pt.Status__c === 'Completed' || pt.Status__c === 'Complete' ? 'bg-success-bg text-success' :
-                    pt.Status__c === 'Skipped' ? 'bg-warning-bg text-warning' :
-                    'bg-bg text-txt-secondary'
-                  }`}>{pt.Status__c || '—'}</span>
+                <Cell value={pt.Driver_Notes__c} className="text-xs text-txt-secondary">
+                  <span className="truncate">{pt.Driver_Notes__c || '—'}</span>
+                </Cell>
+                <td className="px-2.5 py-2 text-center">
+                  <span className={`inline-block text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${status.cls}`}>
+                    {status.label}
+                  </span>
                 </td>
                 <td className="px-2.5 py-2 text-center">
                   <button
@@ -197,11 +237,10 @@ function CardView({ points, onSelectPoint }) {
                     <path d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" /><path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
                   </svg>
                 )}
-                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${
-                  pt.Status__c === 'Completed' ? 'bg-success-bg text-success' :
-                  pt.Status__c === 'Skipped' ? 'bg-warning-bg text-warning' :
-                  'bg-bg text-txt-secondary'
-                }`}>{pt.Status__c || 'New'}</span>
+                {(() => {
+                  const s = statusBadge(pt.Status__c);
+                  return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${s.cls}`}>{s.label}</span>;
+                })()}
                 {pt.isFull__c && <span className="text-[9px] font-bold text-white bg-warning rounded px-1.5 py-px">FULL</span>}
               </div>
               <div className="text-[11px] text-txt-secondary truncate mt-0.5">{pt.Container_Address__c || '—'}</div>
