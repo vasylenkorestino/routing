@@ -6,6 +6,7 @@ import DatePicker from '../ui/DatePicker';
 import Spinner from '../ui/Spinner';
 import ErrorLogsPanel from '../ui/ErrorLogsPanel';
 import ActionLogsPanel from '../ui/ActionLogsPanel';
+import BellMenu from '../notifications/BellMenu';
 
 /** Top toolbar — date, filters, actions, layout toggle, user menu */
 export default function Header() {
@@ -127,8 +128,9 @@ export default function Header() {
         ))}
       </div>
 
-      {/* Action logs + Error logs + User */}
+      {/* Bell + Action logs + Error logs + User */}
       <div className="flex items-center gap-2 ml-2">
+        <BellMenu />
         <button
           className={`h-8 w-8 flex items-center justify-center rounded-lg border transition ${actionLogsOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
           title="Action Logs"

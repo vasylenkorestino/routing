@@ -5,6 +5,7 @@ import modalSlice from './modalSlice';
 import layoutSlice from './layoutSlice';
 import mapSlice from './mapSlice';
 import aiSlice from './aiSlice';
+import bellSlice from './bellSlice';
 
 /** Combined Zustand store — all domain slices merged */
 const useStore = create((...a) => ({
@@ -14,6 +15,7 @@ const useStore = create((...a) => ({
   ...layoutSlice(...a),
   ...mapSlice(...a),
   ...aiSlice(...a),
+  ...bellSlice(...a),
 }));
 
 export default useStore;

@@ -20,6 +20,7 @@ import AIReviewPanel from '../components/shared/AIReviewPanel';
 import AIGenerateModal from '../components/shared/AIGenerateModal';
 import AIEnhanceModal from '../components/routes/AIEnhanceModal';
 import Spinner from '../components/ui/Spinner';
+import useNotificationStream from '../hooks/useNotificationStream';
 
 function RightPanel() {
   const route = useStore((s) => s.route);
@@ -177,6 +178,8 @@ export default function RoutingPage() {
   useEffect(() => {
     loadRoutingData();
   }, [serviceDate, recordType, serviceLocation]);
+
+  useNotificationStream();
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-bg">

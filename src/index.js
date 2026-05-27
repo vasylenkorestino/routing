@@ -12,6 +12,8 @@ const generateRoutes = require('./routes/generate');
 const chatRoutes = require('./routes/chat');
 const routingRoutes = require('./routes/routing');
 const adminRoutes = require('./routes/admin');
+const webhookRoutes = require('./routes/webhooks');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,7 +24,12 @@ app.use(express.json({ limit: '10mb' }));
 app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
 
-app.use('/api', authMiddleware);
+app.use('/api', (req, res, next) => {
+  if (req.path === '/notifications/stream') return next();
+  return authMiddleware(req, res, next);
+});
+app.use('/api/webhooks', webhookRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/enhance-route', enhanceRoutes);
 app.use('/api/generate-routes', generateRoutes);
 app.use('/api/chat', chatRoutes);
