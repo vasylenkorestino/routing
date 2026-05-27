@@ -32,18 +32,35 @@ export default function RouteDataTable({ points: rawPoints = [], onSelectPoint }
   );
 }
 
-const COLS = ['#', 'Location', 'Address', 'Service Type', 'Last Gal.', 'Notes', 'Customer Note', 'Status'];
+const COLS = [
+  { key: '#', width: 40, align: 'left' },
+  { key: 'Location', width: 200 },
+  { key: 'Address', width: 220 },
+  { key: 'Service Type', width: 130 },
+  { key: 'Last Gal.', width: 80, align: 'right' },
+  { key: 'Notes', width: 160 },
+  { key: 'Customer Note', width: 160 },
+  { key: 'Status', width: 100 },
+];
 
 function TableView({ points, onSelectPoint }) {
   const sfInstanceUrl = useStore((s) => s.sfInstanceUrl);
   return (
     <div className="bg-surface rounded-lg border border-border overflow-auto">
-      <table className="w-full border-collapse text-[13px]">
+      <table className="w-full border-collapse text-[13px] table-fixed">
+        <colgroup>
+          {COLS.map((c) => (
+            <col key={c.key} style={{ width: `${c.width}px` }} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
             {COLS.map((col) => (
-              <th key={col} className="sticky top-0 px-2.5 py-2 text-left text-[11px] font-semibold text-txt-secondary uppercase tracking-wider bg-bg border-b-2 border-border whitespace-nowrap">
-                {col}
+              <th
+                key={col.key}
+                className={`sticky top-0 px-2.5 py-2 text-[11px] font-semibold text-txt-secondary uppercase tracking-wider bg-bg border-b-2 border-border whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+              >
+                {col.key}
               </th>
             ))}
           </tr>
@@ -52,23 +69,39 @@ function TableView({ points, onSelectPoint }) {
           {points.map((pt, idx) => (
             <tr key={pt.Id || idx} className="hover:bg-primary-light/40 cursor-pointer transition-colors" onClick={() => onSelectPoint?.(pt)}>
               <td className="px-2.5 py-2 text-txt tabular-nums">{pt.Priority__c ?? idx + 1}</td>
-              <td className="px-2.5 py-2 text-txt font-medium">
+              <Cell value={pt.Account_Name__c}>
                 {sfInstanceUrl && pt.AccountId__c ? (
-                  <a href={`${sfInstanceUrl}/${pt.AccountId__c}`} target="_blank" rel="noreferrer" className="text-primary hover:underline" onClick={(e) => e.stopPropagation()}>
+                  <a
+                    href={`${sfInstanceUrl}/${pt.AccountId__c}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline truncate font-medium"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {pt.Account_Name__c || '—'}
                   </a>
-                ) : (pt.Account_Name__c || '—')}
-                {pt.isAI__c && <span className="inline-block text-[9px] font-bold text-white bg-ai rounded px-1.5 py-px ml-1.5">AI</span>}
-                {pt.Fixed_point__c && <span className="inline-block text-[9px] font-bold text-primary ml-1">📌</span>}
-              </td>
-              <td className="px-2.5 py-2 text-txt">{pt.Container_Address__c || '—'}</td>
-              <td className="px-2.5 py-2 text-txt">{pt.ServiceType__c || '—'}</td>
-              <td className="px-2.5 py-2 text-txt tabular-nums">{pt.LastGallonsCollected__c ?? '—'}</td>
-              <td className="px-2.5 py-2 text-txt-secondary text-xs max-w-[120px] truncate" title={pt.Notes__c}>{pt.Notes__c || '—'}</td>
-              <td className="px-2.5 py-2 text-txt-secondary text-xs max-w-[120px] truncate" title={pt.Notes2__c}>{pt.Notes2__c || '—'}</td>
+                ) : (
+                  <span className="truncate font-medium text-txt">{pt.Account_Name__c || '—'}</span>
+                )}
+                {pt.isAI__c && <span className="shrink-0 text-[9px] font-bold text-white bg-ai rounded px-1.5 py-px">AI</span>}
+                {pt.Fixed_point__c && <span className="shrink-0 text-[9px] font-bold text-primary">📌</span>}
+              </Cell>
+              <Cell value={pt.Container_Address__c}>
+                <span className="truncate text-txt">{pt.Container_Address__c || '—'}</span>
+              </Cell>
+              <Cell value={pt.ServiceType__c}>
+                <span className="truncate text-txt">{pt.ServiceType__c || '—'}</span>
+              </Cell>
+              <td className="px-2.5 py-2 text-txt tabular-nums text-right">{pt.LastGallonsCollected__c ?? '—'}</td>
+              <Cell value={pt.Notes__c} className="text-xs text-txt-secondary">
+                <span className="truncate">{pt.Notes__c || '—'}</span>
+              </Cell>
+              <Cell value={pt.Notes2__c} className="text-xs text-txt-secondary">
+                <span className="truncate">{pt.Notes2__c || '—'}</span>
+              </Cell>
               <td className="px-2.5 py-2">
                 <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                  pt.Status__c === 'Completed' ? 'bg-success-bg text-success' :
+                  pt.Status__c === 'Completed' || pt.Status__c === 'Complete' ? 'bg-success-bg text-success' :
                   pt.Status__c === 'Skipped' ? 'bg-warning-bg text-warning' :
                   'bg-bg text-txt-secondary'
                 }`}>{pt.Status__c || '—'}</span>
@@ -78,6 +111,18 @@ function TableView({ points, onSelectPoint }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Single-line truncating table cell with native hover tooltip showing the full text. */
+function Cell({ value, className = '', children }) {
+  const title = value == null || value === '' ? undefined : String(value);
+  return (
+    <td className={`px-2.5 py-2 ${className}`}>
+      <div className="flex items-center gap-1.5 min-w-0" title={title}>
+        {children}
+      </div>
+    </td>
   );
 }
 
