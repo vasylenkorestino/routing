@@ -240,6 +240,7 @@ function mergeRouteStop(existing, p) {
     Id: p.id,
     Name: p.name ?? base.Name,
     Account__c: p.accountId ?? base.Account__c,
+    AccountId__c: p.accountIdText ?? p.accountId ?? base.AccountId__c,
     Account_Name__c: p.accountName ?? base.Account_Name__c,
     GRoute_Id__c: p.googleRouteId ?? base.GRoute_Id__c,
     Priority__c: p.priority ?? base.Priority__c,
