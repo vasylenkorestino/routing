@@ -10,6 +10,14 @@ export const markNotificationRead = (id) =>
 export const markAllNotificationsRead = () =>
   client.post('/notifications/read-all').then((r) => r.data);
 
+/** Accept a triage proposal — adds the ticket to the suggested route. */
+export const acceptNotification = (id) =>
+  client.post(`/notifications/${id}/accept`).then((r) => r.data);
+
+/** Decline a triage proposal — kicks off a re-triage that skips the declined route. */
+export const declineNotification = (id) =>
+  client.post(`/notifications/${id}/decline`).then((r) => r.data);
+
 /** Builds the SSE URL with the JWT in the query string (EventSource cannot send headers). */
 export function buildStreamUrl() {
   const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');

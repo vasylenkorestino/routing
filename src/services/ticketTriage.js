@@ -3,6 +3,7 @@ const config = require('../config/anthropic');
 const { getConnection } = require('./salesforce');
 const { logErrorToSalesforce } = require('./errorLogger');
 const { publish, EVENT_TICKET_TRIAGED } = require('./notificationBus');
+const { evaluateRoute } = require('../skills/routeReadiness');
 const logger = require('../utils/logger');
 
 const SKILL_NAME = 'Ticket Triage';
@@ -35,24 +36,30 @@ Return ONLY valid JSON with this shape:
 /**
  * Runs end-to-end AI triage for a single Case payload from the SF webhook.
  * Loads context, asks Claude for a decision, persists a RouteLog__c, and publishes a bell event.
- * Returns the created RouteLog payload (or null on failure).
+ *
+ * @param {object} ticket - Case payload from the inbound webhook (or replayed from RouteLog.Input_Data__c)
+ * @param {object} [options]
+ * @param {string[]} [options.excludeRouteIds] - Google_Route__c ids to skip (used by Decline → re-triage)
+ * @param {string|null} [options.parentLogId] - When this triage is a retry, link the new RouteLog__c to the previous one via Parent_Log__c
+ * @returns {Promise<object|null>} the created RouteLog payload or null on failure
  */
-async function triageTicket(ticket) {
+async function triageTicket(ticket, options = {}) {
   if (!ticket || !ticket.id) {
     logger.warn('[ticketTriage] missing ticket id; skipping');
     return null;
   }
+  const { excludeRouteIds = [], parentLogId = null } = options;
 
   try {
     const conn = await getConnection();
     const account = await loadAccount(conn, ticket.accountId);
-    const candidates = await loadCandidateRoutes(conn, ticket, account);
+    const candidates = await loadCandidateRoutes(conn, ticket, account, excludeRouteIds);
 
     const decision = await askClaude({ ticket, account, candidates });
     const matchedRoute = decision.googleRouteId
       ? candidates.find((c) => c.id === decision.googleRouteId)
       : null;
-    const log = await createRouteLog(conn, ticket, decision, matchedRoute);
+    const log = await createRouteLog(conn, ticket, decision, matchedRoute, parentLogId);
 
     if (log) {
       publish(EVENT_TICKET_TRIAGED, log);
@@ -83,7 +90,7 @@ async function loadAccount(conn, accountId) {
   return res.records[0] || null;
 }
 
-async function loadCandidateRoutes(conn, ticket, account) {
+async function loadCandidateRoutes(conn, ticket, account, excludeRouteIds = []) {
   const targetDate = ticket.futureServiceDate
     ? toIsoDate(ticket.futureServiceDate)
     : toIsoDate(new Date().toISOString());
@@ -92,18 +99,41 @@ async function loadCandidateRoutes(conn, ticket, account) {
   if (account?.Shape__c) {
     filters.push(`(Shape__c = '${account.Shape__c}' OR Shape__c = null)`);
   }
+  if (Array.isArray(excludeRouteIds) && excludeRouteIds.length > 0) {
+    const inList = excludeRouteIds
+      .filter(Boolean)
+      .map((id) => `'${String(id).replace(/'/g, "\\'")}'`)
+      .join(',');
+    if (inList) filters.push(`Id NOT IN (${inList})`);
+  }
 
   const soql = `
     SELECT Id, Name, Service_Date__c, Driver__c, DriverName__c, Shape__c,
            Service_Location_Start__c, Service_Location_End__c,
-           CompletionStatus__c, isAI__c, isAIApproved__c, Accounts__c
+           CompletionStatus__c, isAI__c, isAIApproved__c, Accounts__c,
+           Driver_Completed__c, isLocked__c,
+           (SELECT Id, Status__c, Gallons_Collected__c, Notes2__c,
+                   Service_Completed__c, Inactive__c
+            FROM Routes__r)
     FROM Google_Route__c
     WHERE ${filters.join(' AND ')}
     ORDER BY Service_Date__c ASC
     LIMIT 25
   `;
   const res = await conn.query(soql);
-  return (res.records || []).map((r) => ({
+  const records = res.records || [];
+  const open = records.filter((r) => {
+    const stops = (r.Routes__r && r.Routes__r.records) || [];
+    return evaluateRoute(r, stops).open;
+  });
+  if (open.length !== records.length) {
+    logger.info('[ticketTriage] filtered candidate routes by readiness', {
+      total: records.length,
+      open: open.length,
+      ticketId: ticket.id,
+    });
+  }
+  return open.map((r) => ({
     id: r.Id,
     name: r.Name,
     serviceDate: r.Service_Date__c,
@@ -206,7 +236,7 @@ function normalizeDecision(d, candidates) {
   };
 }
 
-async function createRouteLog(conn, ticket, decision, matchedRoute) {
+async function createRouteLog(conn, ticket, decision, matchedRoute, parentLogId = null) {
   const record = {
     Google_Route__c: decision.googleRouteId,
     Account__c: ticket.accountId || null,
@@ -218,6 +248,7 @@ async function createRouteLog(conn, ticket, decision, matchedRoute) {
     Reason__c: buildReasonString(ticket, decision),
     Input_Data__c: JSON.stringify({ ticket, decision }).substring(0, 32000),
   };
+  if (parentLogId) record.Parent_Log__c = parentLogId;
 
   try {
     const created = await conn.sobject('RouteLog__c').create(record);
@@ -238,6 +269,7 @@ async function createRouteLog(conn, ticket, decision, matchedRoute) {
       type: record.Type__c,
       confidence: decision.confidence,
       reason: decision.reason,
+      parentLogId: parentLogId || null,
       createdAt: new Date().toISOString(),
     };
   } catch (err) {

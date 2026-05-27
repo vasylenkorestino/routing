@@ -8,6 +8,7 @@ const bus = new EventEmitter();
 bus.setMaxListeners(0);
 
 const EVENT_TICKET_TRIAGED = 'ticket-triaged';
+const EVENT_SF_CHANGED = 'sf-changed';
 
 /** Publishes a notification payload to all SSE subscribers. */
 function publish(event, payload) {
@@ -20,4 +21,4 @@ function subscribe(listener) {
   return () => bus.off('notification', listener);
 }
 
-module.exports = { publish, subscribe, EVENT_TICKET_TRIAGED };
+module.exports = { publish, subscribe, EVENT_TICKET_TRIAGED, EVENT_SF_CHANGED };

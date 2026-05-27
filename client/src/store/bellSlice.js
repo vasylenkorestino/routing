@@ -57,6 +57,78 @@ const bellSlice = (set, get) => ({
     }
   },
 
+  /**
+   * Accept a triage proposal — server adds the ticket to the suggested route.
+   * Optimistically updates status; on a 409 (route closed/started) the item is
+   * marked locked so the UI can show a lock pill instead of action buttons.
+   * Returns { ok, lockedReason } so the caller can toast a precise message.
+   */
+  acceptNotification: async (id) => {
+    const ts = new Date().toISOString();
+    set((s) => ({
+      notifications: s.notifications.map((n) =>
+        n.id === id ? { ...n, status: 'Accepted', readAt: n.readAt || ts, _pending: 'accept' } : n,
+      ),
+    }));
+    try {
+      const data = await notifApi.acceptNotification(id);
+      set((s) => ({
+        notifications: s.notifications.map((n) =>
+          n.id === id
+            ? { ...n, status: 'Accepted', acceptedBy: data.acceptedBy || null, _pending: null }
+            : n,
+        ),
+        unreadCount: s.notifications.filter((x) => !x.readAt && x.id !== id).length,
+      }));
+      return { ok: true };
+    } catch (err) {
+      const data = err?.response?.data || {};
+      const lockedReason = data.code === 'ROUTE_CLOSED' ? data.reason || data.error : null;
+      set((s) => ({
+        notifications: s.notifications.map((n) =>
+          n.id === id
+            ? { ...n, status: 'Proposed', _pending: null, _locked: lockedReason || n._locked }
+            : n,
+        ),
+      }));
+      return { ok: false, lockedReason, message: data.error || err.message };
+    }
+  },
+
+  /**
+   * Decline a triage proposal — server marks Declined and queues a re-triage
+   * that excludes the declined route. Same locking semantics as accept.
+   */
+  declineNotification: async (id) => {
+    const ts = new Date().toISOString();
+    set((s) => ({
+      notifications: s.notifications.map((n) =>
+        n.id === id ? { ...n, status: 'Declined', readAt: n.readAt || ts, _pending: 'decline' } : n,
+      ),
+    }));
+    try {
+      await notifApi.declineNotification(id);
+      set((s) => ({
+        notifications: s.notifications.map((n) =>
+          n.id === id ? { ...n, status: 'Declined', _pending: null } : n,
+        ),
+        unreadCount: s.notifications.filter((x) => !x.readAt && x.id !== id).length,
+      }));
+      return { ok: true };
+    } catch (err) {
+      const data = err?.response?.data || {};
+      const lockedReason = data.code === 'ROUTE_CLOSED' ? data.reason || data.error : null;
+      set((s) => ({
+        notifications: s.notifications.map((n) =>
+          n.id === id
+            ? { ...n, status: 'Proposed', _pending: null, _locked: lockedReason || n._locked }
+            : n,
+        ),
+      }));
+      return { ok: false, lockedReason, message: data.error || err.message };
+    }
+  },
+
   connectStream: () => {
     if (get()._eventSource) return;
     if (typeof window === 'undefined' || !('EventSource' in window)) return;
@@ -69,6 +141,18 @@ const bellSlice = (set, get) => ({
         set({ isStreamConnected: true });
       });
 
+      es.addEventListener('sf-changed', (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          const applyServerPatch = get().applyServerPatch;
+          if (typeof applyServerPatch === 'function') {
+            applyServerPatch(payload);
+          }
+        } catch (err) {
+          console.warn('[bellSlice] failed to parse sf-changed message', err.message);
+        }
+      });
+
       es.addEventListener('ticket-triaged', (e) => {
         try {
           const payload = JSON.parse(e.data);
@@ -76,6 +160,7 @@ const bellSlice = (set, get) => ({
             id: payload.id,
             createdAt: payload.createdAt,
             readAt: null,
+            status: 'Proposed',
             type: payload.type,
             skill: 'Ticket Triage',
             confidence: payload.confidence ? payload.confidence / 100 : null,
@@ -87,6 +172,7 @@ const bellSlice = (set, get) => ({
             ticketId: payload.ticketId,
             caseNumber: payload.caseNumber,
             ticketSubject: null,
+            parentLogId: payload.parentLogId || null,
           });
         } catch (err) {
           console.warn('[bellSlice] failed to parse SSE message', err.message);

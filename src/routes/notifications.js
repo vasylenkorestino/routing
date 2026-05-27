@@ -3,6 +3,8 @@ const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../middleware/auth');
 const { getConnection } = require('../services/salesforce');
 const { subscribe } = require('../services/notificationBus');
+const { assertRouteOpen, RouteClosedError } = require('../skills/routeReadiness');
+const { triageTicket } = require('../services/ticketTriage');
 const logger = require('../utils/logger');
 
 const TRIAGE_SKILL = 'Ticket Triage';
@@ -64,7 +66,8 @@ router.get('/', async (req, res, next) => {
     const soql = `
       SELECT Id, Name, CreatedDate, Read_Date__c, Status__c, Type__c, Skill__c,
              Confidence__c, Reason__c, Account__c, Account__r.Name,
-             Google_Route__c, Google_Route__r.Name, Ticket__c, Ticket__r.CaseNumber, Ticket__r.Subject
+             Google_Route__c, Google_Route__r.Name, Ticket__c, Ticket__r.CaseNumber, Ticket__r.Subject,
+             Accepted_By__c, Accepted_Date__c
       FROM RouteLog__c
       WHERE Skill__c = '${TRIAGE_SKILL}' AND Read_Date__c = null
       ORDER BY CreatedDate DESC
@@ -73,6 +76,99 @@ router.get('/', async (req, res, next) => {
     const result = await conn.query(soql);
     const notifications = (result.records || []).map(toNotification);
     res.json({ notifications, unreadCount: notifications.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/notifications/:id/accept
+ * Accept a triage proposal. Updates RouteLog__c.Status__c to 'Accepted'; the
+ * existing RouteLogTriggerHelper Apex creates the Route__c stop and triggers
+ * async optimization. Rejected with 409 if the target route is closed/started.
+ */
+router.post('/:id/accept', async (req, res, next) => {
+  try {
+    const conn = await getConnection();
+    const log = await loadTriageLog(conn, req.params.id);
+    if (!log) return res.status(404).json({ error: 'Notification not found' });
+    if (log.Status__c !== 'Proposed') {
+      return res.status(409).json({ error: `Notification already ${log.Status__c}`, reason: 'NOT_PROPOSED' });
+    }
+
+    if (log.Google_Route__c) {
+      try {
+        await assertRouteOpen(conn, log.Google_Route__c);
+      } catch (err) {
+        if (err instanceof RouteClosedError) {
+          return res.status(409).json({ error: err.message, reason: err.reason, code: 'ROUTE_CLOSED' });
+        }
+        throw err;
+      }
+    }
+
+    const acceptedBy = req.driver?.name || req.driver?.email || 'AWS Agent';
+    const now = new Date().toISOString();
+    await conn.sobject('RouteLog__c').update({
+      Id: log.Id,
+      Status__c: 'Accepted',
+      Accepted_By__c: acceptedBy,
+      Accepted_Date__c: now,
+      Read_Date__c: now,
+    });
+
+    res.json({ success: true, status: 'Accepted', acceptedBy, acceptedAt: now });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/notifications/:id/decline
+ * Decline a triage proposal. Marks RouteLog__c as 'Declined' and re-triages
+ * the same ticket with the declined Google_Route__c excluded so the AI picks
+ * a different candidate. The retry log is linked back via Parent_Log__c.
+ */
+router.post('/:id/decline', async (req, res, next) => {
+  try {
+    const conn = await getConnection();
+    const log = await loadTriageLog(conn, req.params.id);
+    if (!log) return res.status(404).json({ error: 'Notification not found' });
+    if (log.Status__c !== 'Proposed') {
+      return res.status(409).json({ error: `Notification already ${log.Status__c}`, reason: 'NOT_PROPOSED' });
+    }
+
+    if (log.Google_Route__c) {
+      try {
+        await assertRouteOpen(conn, log.Google_Route__c);
+      } catch (err) {
+        if (err instanceof RouteClosedError) {
+          return res.status(409).json({ error: err.message, reason: err.reason, code: 'ROUTE_CLOSED' });
+        }
+        throw err;
+      }
+    }
+
+    const now = new Date().toISOString();
+    await conn.sobject('RouteLog__c').update({
+      Id: log.Id,
+      Status__c: 'Declined',
+      Read_Date__c: now,
+    });
+
+    const ticket = parseStoredTicket(log.Input_Data__c);
+    if (ticket && ticket.id) {
+      const exclude = log.Google_Route__c ? [log.Google_Route__c] : [];
+      setImmediate(() => {
+        triageTicket(ticket, { excludeRouteIds: exclude, parentLogId: log.Id }).catch((err) =>
+          logger.error('[notifications] re-triage after decline failed', { error: err.message, logId: log.Id }),
+        );
+      });
+    } else {
+      logger.warn('[notifications] decline could not re-triage: missing ticket payload', { logId: log.Id });
+    }
+
+    res.json({ success: true, status: 'Declined', declinedAt: now });
   } catch (err) {
     next(err);
   }
@@ -127,12 +223,40 @@ function toNotification(r) {
     ticketId: r.Ticket__c,
     caseNumber: r.Ticket__r?.CaseNumber || null,
     ticketSubject: r.Ticket__r?.Subject || null,
+    acceptedBy: r.Accepted_By__c || null,
+    acceptedAt: r.Accepted_Date__c || null,
   };
 }
 
 function extractBearer(req) {
   const h = req.headers.authorization || '';
   return h.startsWith('Bearer ') ? h.replace('Bearer ', '') : null;
+}
+
+/** Loads the minimal RouteLog fields needed to gate accept/decline + reconstruct the ticket. */
+async function loadTriageLog(conn, id) {
+  if (!id) return null;
+  const safeId = String(id).replace(/'/g, "\\'");
+  const soql = `
+    SELECT Id, Status__c, Skill__c, Google_Route__c, Account__c, Ticket__c, Input_Data__c
+    FROM RouteLog__c
+    WHERE Id = '${safeId}' AND Skill__c = '${TRIAGE_SKILL}'
+    LIMIT 1
+  `;
+  const result = await conn.query(soql);
+  return result.records?.[0] || null;
+}
+
+/** Pulls the ticket payload that triageTicket originally received out of Input_Data__c. */
+function parseStoredTicket(inputData) {
+  if (!inputData) return null;
+  try {
+    const parsed = JSON.parse(inputData);
+    return parsed?.ticket || null;
+  } catch (err) {
+    logger.warn('[notifications] could not parse Input_Data__c', { error: err.message });
+    return null;
+  }
 }
 
 module.exports = router;

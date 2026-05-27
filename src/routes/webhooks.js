@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const logger = require('../utils/logger');
-const { triageTicket } = require('../services/ticketTriage');
+const sfSync = require('../services/sfSync');
 
 /** Restricts inbound webhooks to API_KEY (server-to-server) callers. */
 function requireApiKey(req, res, next) {
@@ -10,42 +10,39 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-/**
- * POST /api/webhooks/sf/case-created
- * Inbound webhook from Salesforce CaseTrigger → WebhookQueueable.
- * Body: { object, event, orgId, timestamp, records: [{ id, accountId, ... }] }
- * Acks 202 immediately and runs triage out-of-band so the Apex callout returns fast.
- */
-router.post('/sf/case-created', requireApiKey, (req, res) => {
-  const records = Array.isArray(req.body?.records) ? req.body.records : [];
-  const accepted = records.length;
-  res.status(202).json({ accepted });
-
-  if (accepted === 0) {
-    logger.warn('[webhook] sf/case-created received with no records');
-    return;
-  }
-
-  for (const ticket of records) {
-    setImmediate(async () => {
-      try {
-        await triageTicket(ticket);
-      } catch (err) {
-        logger.error('[webhook] triage failed', { error: err.message, ticketId: ticket?.id });
-      }
-    });
-  }
-});
+const SUPPORTED_OBJECTS = new Set(['case', 'route', 'google_route']);
+const SUPPORTED_EVENTS = new Set(['created', 'updated', 'deleted']);
 
 /**
  * POST /api/webhooks/sf/:object-:event
- * Generic placeholder for future objects (google_route-updated, account-created, ...).
+ *
+ * Generic inbound webhook endpoint covering every object/event combination
+ * sent by the Apex `OutboundWebhookService` (case-created, case-updated,
+ * case-deleted, route-*, google_route-*). The handler returns 202 immediately
+ * so the Apex callout doesn't sit waiting on Salesforce → AWS work, then runs
+ * the actual sync via `sfSync.dispatch` out-of-band.
+ *
+ * Express splits the path on '-' so we re-stitch when the object key contains
+ * underscores (`google_route`).
  */
 router.post('/sf/:object-:event', requireApiKey, (req, res) => {
   const { object, event } = req.params;
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
-  logger.info('[webhook] generic event received', { object, event, count: records.length });
-  res.status(202).json({ accepted: records.length, dispatched: false });
+
+  if (!SUPPORTED_OBJECTS.has(object) || !SUPPORTED_EVENTS.has(event)) {
+    logger.warn('[webhook] unsupported event', { object, event, count: records.length });
+    return res.status(202).json({ accepted: records.length, dispatched: false });
+  }
+
+  res.status(202).json({ accepted: records.length, dispatched: true });
+
+  setImmediate(async () => {
+    try {
+      await sfSync.dispatch(object, event, records);
+    } catch (err) {
+      logger.error('[webhook] sfSync.dispatch failed', { object, event, error: err.message });
+    }
+  });
 });
 
 module.exports = router;
