@@ -15,6 +15,12 @@ function relTime(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
+/** Strips the "[ADD] AccountName: " / "[NEW] AccountName: " server prefix from the reason text. */
+function cleanReason(reason) {
+  if (!reason) return '';
+  return reason.replace(/^\[(ADD|NEW)\][^:]*:\s*/i, '').trim();
+}
+
 /** Bell icon + unread badge + dropdown of recent triage recommendations. */
 export default function BellMenu() {
   const notifications = useStore((s) => s.notifications);
@@ -25,6 +31,7 @@ export default function BellMenu() {
   const isStreamConnected = useStore((s) => s.isStreamConnected);
 
   const [open, setOpen] = useState(false);
+  const [expandedIds, setExpandedIds] = useState({});
   const containerRef = useRef(null);
   const lastSeenIdRef = useRef(null);
 
@@ -54,13 +61,14 @@ export default function BellMenu() {
     }
   }, [notifications]);
 
-  const handleClick = async (n) => {
+  const goToRoute = async (n) => {
     if (!n.readAt) await markRead(n.id);
-    if (n.googleRouteId) {
-      selectRoute(n.googleRouteId);
-    }
+    if (n.googleRouteId) selectRoute(n.googleRouteId);
     setOpen(false);
   };
+
+  const toggleExpand = (id) =>
+    setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
 
   return (
     <div ref={containerRef} className="relative">
@@ -81,9 +89,16 @@ export default function BellMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-10 w-[360px] max-h-[480px] overflow-hidden bg-surface border border-border rounded-lg shadow-2xl z-30 flex flex-col">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-            <div className="text-[13px] font-semibold text-txt">Notifications</div>
+        <div className="absolute right-0 top-10 w-[420px] max-h-[560px] overflow-hidden bg-surface border border-border rounded-xl shadow-2xl z-30 flex flex-col">
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-border">
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-semibold text-txt">Notifications</span>
+              {unreadCount > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-500 text-[10px] font-bold">
+                  {unreadCount} new
+                </span>
+              )}
+            </div>
             <button
               className="text-[11px] text-txt-secondary hover:text-primary disabled:opacity-50"
               onClick={() => markAllRead()}
@@ -94,12 +109,19 @@ export default function BellMenu() {
           </div>
           <div className="flex-1 overflow-y-auto">
             {notifications.length === 0 && (
-              <div className="px-4 py-6 text-center text-[12px] text-txt-secondary">
+              <div className="px-4 py-10 text-center text-[12px] text-txt-secondary">
                 No notifications yet.
               </div>
             )}
             {notifications.map((n) => (
-              <NotificationItem key={n.id} n={n} onClick={() => handleClick(n)} />
+              <NotificationItem
+                key={n.id}
+                n={n}
+                expanded={!!expandedIds[n.id]}
+                onToggle={() => toggleExpand(n.id)}
+                onGoToRoute={() => goToRoute(n)}
+                onMarkRead={() => markRead(n.id)}
+              />
             ))}
           </div>
         </div>
@@ -108,24 +130,28 @@ export default function BellMenu() {
   );
 }
 
-function NotificationItem({ n, onClick }) {
+/** Single notification card — full reason text, route chip, primary "Open route" action. */
+function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead }) {
   const isAdd = n.type === 'Ticket Triage - Add To Route';
   const accent = isAdd ? 'text-emerald-600' : 'text-ai';
+  const accentBg = isAdd ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-ai/10 border-ai/30 text-ai';
+  const reason = cleanReason(n.reason);
+  const showToggle = reason.length > 140;
+  const routeLabel = n.googleRouteName || (n.googleRouteId ? 'Existing route' : 'New route');
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`w-full text-left px-3 py-2 border-b border-border hover:bg-bg transition ${n.readAt ? 'opacity-60' : ''}`}
-    >
+    <div className={`px-3 py-2.5 border-b border-border transition ${n.readAt ? 'opacity-70' : 'bg-ai/[0.03]'}`}>
       <div className="flex items-start gap-2">
-        <span className={`mt-0.5 h-2 w-2 rounded-full ${n.readAt ? 'bg-border' : 'bg-ai'}`} />
+        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.readAt ? 'bg-border' : 'bg-ai'}`} />
+
         <div className="flex-1 min-w-0">
+          {/* Header row: action label, confidence, time */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className={`text-[11px] font-semibold ${accent}`}>
+            <span className={`text-[11px] font-semibold uppercase tracking-wide ${accent}`}>
               {isAdd ? 'Add to route' : 'New route suggested'}
             </span>
             {n.confidence != null && (
-              <span className="text-[10px] text-txt-secondary">
+              <span className="px-1.5 py-0.5 rounded-full bg-bg text-txt-secondary text-[10px] font-bold">
                 {Math.round((Number(n.confidence) || 0) * 100)}%
               </span>
             )}
@@ -133,17 +159,63 @@ function NotificationItem({ n, onClick }) {
               {relTime(n.createdAt)}
             </span>
           </div>
-          <div className="text-[13px] text-txt font-medium truncate">
+
+          {/* Account / ticket */}
+          <div className="mt-1 text-[13px] text-txt font-semibold break-words">
             {n.accountName || n.caseNumber || 'Ticket'}
-            {n.googleRouteName ? ` → ${n.googleRouteName}` : ''}
           </div>
-          {n.reason && (
-            <div className="text-[12px] text-txt-secondary line-clamp-2">
-              {n.reason}
+          {n.caseNumber && n.accountName && (
+            <div className="text-[11px] text-txt-secondary">Case {n.caseNumber}</div>
+          )}
+
+          {/* Highlighted route chip */}
+          <button
+            type="button"
+            onClick={onGoToRoute}
+            className={`mt-2 inline-flex items-center gap-1.5 max-w-full px-2 py-1 rounded-md border text-[12px] font-medium transition hover:brightness-95 ${accentBg}`}
+            title={n.googleRouteId ? 'Open route' : 'No route assigned yet'}
+          >
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l5.447 2.724A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 9m0 8V9m0 0L9 7" />
+            </svg>
+            <span className="truncate">{routeLabel}</span>
+            {n.googleRouteId && (
+              <svg className="w-3 h-3 shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            )}
+          </button>
+
+          {/* Full reason (expandable) */}
+          {reason && (
+            <div className="mt-2 text-[12px] text-txt-secondary leading-relaxed whitespace-pre-wrap break-words">
+              {expanded || !showToggle ? reason : `${reason.slice(0, 140)}…`}
+              {showToggle && (
+                <button
+                  type="button"
+                  onClick={onToggle}
+                  className="ml-1 text-[11px] font-medium text-primary hover:underline"
+                >
+                  {expanded ? 'Show less' : 'Show more'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Actions row */}
+          {!n.readAt && (
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onMarkRead}
+                className="text-[11px] text-txt-secondary hover:text-primary"
+              >
+                Mark as read
+              </button>
             </div>
           )}
         </div>
       </div>
-    </button>
+    </div>
   );
 }

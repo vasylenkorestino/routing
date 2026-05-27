@@ -83,7 +83,7 @@ const bellSlice = (set, get) => ({
             accountId: payload.accountId,
             accountName: payload.accountName,
             googleRouteId: payload.googleRouteId,
-            googleRouteName: null,
+            googleRouteName: payload.googleRouteName || null,
             ticketId: payload.ticketId,
             caseNumber: payload.caseNumber,
             ticketSubject: null,

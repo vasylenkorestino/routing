@@ -49,7 +49,10 @@ async function triageTicket(ticket) {
     const candidates = await loadCandidateRoutes(conn, ticket, account);
 
     const decision = await askClaude({ ticket, account, candidates });
-    const log = await createRouteLog(conn, ticket, decision);
+    const matchedRoute = decision.googleRouteId
+      ? candidates.find((c) => c.id === decision.googleRouteId)
+      : null;
+    const log = await createRouteLog(conn, ticket, decision, matchedRoute);
 
     if (log) {
       publish(EVENT_TICKET_TRIAGED, log);
@@ -203,7 +206,7 @@ function normalizeDecision(d, candidates) {
   };
 }
 
-async function createRouteLog(conn, ticket, decision) {
+async function createRouteLog(conn, ticket, decision, matchedRoute) {
   const record = {
     Google_Route__c: decision.googleRouteId,
     Account__c: ticket.accountId || null,
@@ -230,6 +233,7 @@ async function createRouteLog(conn, ticket, decision) {
       accountId: ticket.accountId,
       accountName: ticket.accountName,
       googleRouteId: decision.googleRouteId,
+      googleRouteName: matchedRoute ? matchedRoute.name : null,
       decision: decision.decision,
       type: record.Type__c,
       confidence: decision.confidence,
