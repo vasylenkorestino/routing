@@ -1,10 +1,10 @@
-/** Eazy Grease brand logo shown on auth screens. */
+/** Full-width Eazy Grease banner header for auth screens. */
 export default function BrandLogo() {
   return (
     <img
-      src="/eazy-grease-logo.png"
+      src="/eazy-grease-header.webp"
       alt="Eazy Grease"
-      className="h-14 w-auto max-w-full mx-auto mb-3 rounded-xl shadow-lg object-contain"
+      className="w-full h-auto block object-cover"
     />
   );
 }

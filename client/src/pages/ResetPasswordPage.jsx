@@ -32,9 +32,10 @@ export default function ResetPasswordPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-800 to-primary p-4">
-      <div className="w-full max-w-sm bg-surface rounded-2xl shadow-xl p-10">
+      <div className="w-full max-w-sm bg-surface rounded-2xl shadow-xl overflow-hidden">
+        <BrandLogo />
+        <div className="p-10 pt-8">
         <div className="text-center mb-8">
-          <BrandLogo />
           <h1 className="text-xl font-bold text-txt">Set New Password</h1>
           <p className="text-sm text-txt-secondary mt-1">Enter your new password</p>
         </div>
@@ -67,6 +68,7 @@ export default function ResetPasswordPage() {
             <Link to="/login" className="text-xs text-center text-primary hover:underline">Back to Login</Link>
           </form>
         )}
+        </div>
       </div>
     </div>
   );
