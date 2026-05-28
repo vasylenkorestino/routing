@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import useStore from '../store';
+import BrandLogo from '../components/ui/BrandLogo';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -35,9 +36,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-800 to-primary p-4">
       <div className="w-full max-w-sm bg-surface rounded-2xl shadow-xl p-10">
         <div className="text-center mb-8">
-          <div className="w-14 h-14 rounded-xl bg-primary inline-flex items-center justify-center text-white text-2xl font-bold mb-3 shadow-lg shadow-primary/30">
-            U
-          </div>
+          <BrandLogo />
           <h1 className="text-xl font-bold text-txt">UCO Routing System</h1>
           <p className="text-sm text-txt-secondary mt-1">Sign in to manage routes</p>
         </div>
