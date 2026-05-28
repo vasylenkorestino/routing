@@ -85,35 +85,45 @@ const routingSlice = (set, get) => ({
     }
   },
 
+  /** Re-fetches routes for current filters; keeps the selected route when it still exists. */
   refreshRoutes: async () => {
     const { serviceDate, recordType, serviceLocation, routeId, routes: oldRoutes } = get();
-    const params = {
-      serviceDate: serviceDate || undefined,
-      recordTypeName: recordType || undefined,
-      serviceLocationId: serviceLocation || undefined,
-    };
-    const data = await routingApi.getRoutingData(params);
-    const routes = assignColors(data.routes ?? []);
-    set({
-      routes,
-      drivers: data.drivers ?? get().drivers,
-      serviceLocations: data.serviceLocations ?? get().serviceLocations,
-    });
-    get().setLayerData('routes', routes);
+    set({ isLoading: true });
+    try {
+      const params = {
+        serviceDate: serviceDate || undefined,
+        recordTypeName: recordType || undefined,
+        serviceLocationId: serviceLocation || undefined,
+      };
+      const data = await routingApi.getRoutingData(params);
+      const routes = assignColors(data.routes ?? []);
+      set({
+        routes,
+        drivers: data.drivers ?? get().drivers,
+        serviceLocations: data.serviceLocations ?? get().serviceLocations,
+      });
+      get().setLayerData('routes', routes);
 
-    if (routeId) {
-      const updated = routes.find((r) => (r.Id ?? r.id) === routeId) ?? null;
-      if (updated) {
-        set({ route: updated });
-        return;
+      if (routeId) {
+        const updated = routes.find((r) => (r.Id ?? r.id) === routeId) ?? null;
+        if (updated) {
+          set({ routeId, route: updated });
+          return;
+        }
       }
-    }
-    const oldIds = new Set(oldRoutes.map((r) => r.Id ?? r.id));
-    const newRoute = routes.find((r) => !oldIds.has(r.Id ?? r.id));
-    if (newRoute) {
-      set({ routeId: newRoute.Id ?? newRoute.id, route: newRoute });
-    } else if (routes.length > 0 && !routeId) {
-      set({ routeId: routes[0].Id ?? routes[0].id, route: routes[0] });
+      const oldIds = new Set(oldRoutes.map((r) => r.Id ?? r.id));
+      const newRoute = routes.find((r) => !oldIds.has(r.Id ?? r.id));
+      if (newRoute) {
+        set({ routeId: newRoute.Id ?? newRoute.id, route: newRoute });
+      } else if (routes.length > 0 && !routeId) {
+        set({ routeId: routes[0].Id ?? routes[0].id, route: routes[0] });
+      } else if (routeId && !routes.some((r) => (r.Id ?? r.id) === routeId)) {
+        set({ routeId: null, route: null });
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      set({ isLoading: false });
     }
   },
 

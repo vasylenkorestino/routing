@@ -21,13 +21,12 @@ export default function Header() {
   const routes = useStore((st) => st.routes);
   const routeId = useStore((st) => st.routeId);
   const selectRoute = useStore((st) => st.selectRoute);
-  const loadRoutingData = useStore((st) => st.loadRoutingData);
+  const refreshRoutes = useStore((st) => st.refreshRoutes);
   const isLoading = useStore((st) => st.isLoading);
   const panelMode = useStore((st) => st.panelMode);
   const setPanelMode = useStore((st) => st.setPanelMode);
   const openModal = useStore((st) => st.openModal);
   const driver = useStore((st) => st.driver);
-  const logout = useStore((st) => st.logout);
   const [logsOpen, setLogsOpen] = useState(false);
   const toggleLogs = useCallback(() => { setLogsOpen((p) => !p); setActionLogsOpen(false); }, []);
   const closeLogs = useCallback(() => setLogsOpen(false), []);
@@ -83,7 +82,7 @@ export default function Header() {
         <button
           className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition disabled:opacity-50"
           title="Refresh"
-          onClick={() => loadRoutingData()}
+          onClick={() => refreshRoutes()}
           disabled={isLoading}
         >
           {isLoading ? (
@@ -169,12 +168,6 @@ export default function Header() {
             {driver?.name || 'User'}
           </span>
         </div>
-        <button
-          className="h-8 px-2.5 rounded-lg border border-error/30 bg-surface text-error text-xs font-medium hover:bg-error-bg transition"
-          onClick={logout}
-        >
-          Logout
-        </button>
       </div>
       <ActionLogsPanel open={actionLogsOpen} onClose={closeActionLogs} />
       <ErrorLogsPanel open={logsOpen} onClose={closeLogs} />
