@@ -73,10 +73,7 @@ function formatDate(value) {
 
 /**
  * Returns display label + Tailwind classes for a Route__c.Status__c value.
- * - 'Driver Complete' / 'Completed' → "Complete" in green
- * - 'Passed' → grey muted ("inactive/unserviced")
- * - 'Skipped' → warning yellow
- * - others → neutral
+ * Expects stops to pass through preparePoints / applyPointStatusStyle first.
  */
 function statusBadge(raw) {
   const s = raw || '';
@@ -85,6 +82,7 @@ function statusBadge(raw) {
   }
   if (s === 'Passed') return { label: 'Passed', cls: 'bg-bg text-txt-secondary border border-border' };
   if (s === 'Skipped') return { label: 'Skipped', cls: 'bg-warning-bg text-warning border border-warning/20' };
+  if (s === 'New') return { label: 'New', cls: 'bg-bg text-txt-secondary border border-border' };
   if (!s) return { label: 'New', cls: 'bg-bg text-txt-secondary border border-border' };
   return { label: s, cls: 'bg-bg text-txt-secondary border border-border' };
 }

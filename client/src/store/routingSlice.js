@@ -2,12 +2,34 @@ import * as routingApi from '../api/routing';
 import { getTodayET } from '../utils/date';
 import { toast } from '../components/ui/Toast';
 import { getErrorMessage } from '../utils/error';
+import { applyPointStatusStyle, prepareGoogleRoutes } from '../utils/preparePoints';
 
 const ROUTE_COLORS = ['#2563eb', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
 /** Stamp a stable _color on each route based on its position in the full array */
 function assignColors(routes) {
   return routes.map((r, i) => ({ ...r, _color: ROUTE_COLORS[i % ROUTE_COLORS.length] }));
+}
+
+/** Assign route colours then apply LWC-equivalent stop status display logic. */
+function normalizeRoutes(routes) {
+  return prepareGoogleRoutes(assignColors(routes));
+}
+
+/** Reads child stops whether Routes__r is an array or { records: [] }. */
+function getRouteStops(route) {
+  const r = route?.Routes__r;
+  if (!r) return route?.points ?? [];
+  if (Array.isArray(r)) return r;
+  return r.records ?? route.points ?? [];
+}
+
+/** Writes prepared stops back onto a route header. */
+function withPreparedStops(route, stops) {
+  const prepared = Array.isArray(route?.Routes__r)
+    ? stops
+    : { ...(route?.Routes__r || {}), records: stops };
+  return { ...route, points: stops, Routes__r: prepared };
 }
 
 /** Routing slice — route list, filters, and selected route state */
@@ -47,7 +69,7 @@ const routingSlice = (set, get) => ({
       };
       console.log('[loadRoutingData] params:', params);
       const data = await routingApi.getRoutingData(params);
-      const routes = assignColors(data.routes ?? []);
+      const routes = normalizeRoutes(data.routes ?? []);
       console.log('[loadRoutingData] response:', { routes: routes.length, drivers: data?.drivers?.length, serviceLocations: data?.serviceLocations?.length });
       const firstRoute = routes.length > 0 ? routes[0] : null;
       set({
@@ -96,7 +118,7 @@ const routingSlice = (set, get) => ({
         serviceLocationId: serviceLocation || undefined,
       };
       const data = await routingApi.getRoutingData(params);
-      const routes = assignColors(data.routes ?? []);
+      const routes = normalizeRoutes(data.routes ?? []);
       set({
         routes,
         drivers: data.drivers ?? get().drivers,
@@ -175,7 +197,7 @@ function applyGoogleRoutePatch(set, get, event, record) {
 
   const merged = mergeGoogleRoute(current[existingIdx], record);
   const next = existingIdx === -1 ? [...current, merged] : current.map((r, i) => (i === existingIdx ? merged : r));
-  const colored = assignColors(next);
+  const colored = normalizeRoutes(next);
   const patch = { routes: colored };
   if (get().routeId === id) {
     patch.route = colored.find((r) => getId(r) === id) || null;
@@ -195,12 +217,12 @@ function applyRouteStopPatch(set, get, event, record) {
   if (parentIdx === -1) return;
 
   const parent = current[parentIdx];
-  const stops = (parent.Routes__r?.records || []).slice();
+  const stops = getRouteStops(parent).slice();
 
   if (event === 'deleted') {
     const filtered = stops.filter((s) => getId(s) !== stopId);
     if (filtered.length === stops.length) return;
-    const updatedParent = { ...parent, Routes__r: { ...(parent.Routes__r || {}), records: filtered } };
+    const updatedParent = withPreparedStops(parent, filtered);
     const next = current.map((r, i) => (i === parentIdx ? updatedParent : r));
     set({ routes: next, route: get().routeId === parentId ? updatedParent : get().route });
     return;
@@ -209,7 +231,7 @@ function applyRouteStopPatch(set, get, event, record) {
   const stopIdx = stops.findIndex((s) => getId(s) === stopId);
   const merged = mergeRouteStop(stops[stopIdx], record);
   const nextStops = stopIdx === -1 ? [...stops, merged] : stops.map((s, i) => (i === stopIdx ? merged : s));
-  const updatedParent = { ...parent, Routes__r: { ...(parent.Routes__r || {}), records: nextStops } };
+  const updatedParent = withPreparedStops(parent, nextStops);
   const next = current.map((r, i) => (i === parentIdx ? updatedParent : r));
   set({ routes: next, route: get().routeId === parentId ? updatedParent : get().route });
 }
@@ -271,6 +293,8 @@ function mergeRouteStop(existing, p) {
     isAI__c: nullable(p.isAI, base.isAI__c),
     Last_Route_Serviced_Date__c: p.lastRouteServicedDate ?? base.Last_Route_Serviced_Date__c,
   };
+  applyPointStatusStyle(merged);
+  return merged;
 }
 
 function nullable(incoming, fallback) {
