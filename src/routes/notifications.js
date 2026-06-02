@@ -65,8 +65,11 @@ router.get('/', async (req, res, next) => {
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const soql = `
       SELECT Id, Name, CreatedDate, Read_Date__c, Status__c, Type__c, Skill__c,
-             Confidence__c, Reason__c, Account__c, Account__r.Name,
-             Google_Route__c, Google_Route__r.Name, Ticket__c, Ticket__r.CaseNumber, Ticket__r.Subject,
+             Confidence__c, Reason__c, Input_Data__c,
+             Account__c, Account__r.Name, Account__r.MALatitude__c, Account__r.MALongitude__c,
+             Google_Route__c, Google_Route__r.Name,
+             Ticket__c, Ticket__r.CaseNumber, Ticket__r.Subject, Ticket__r.Type,
+             Ticket__r.CreatedDate, Ticket__r.RecordType.Name,
              Accepted_By__c, Accepted_Date__c
       FROM RouteLog__c
       WHERE Skill__c = '${TRIAGE_SKILL}' AND Read_Date__c = null
@@ -206,6 +209,13 @@ router.post('/read-all', async (req, res, next) => {
 });
 
 function toNotification(r) {
+  const stored = parseStoredTicket(r.Input_Data__c);
+  const ticketType = r.Ticket__r?.Type || stored?.typeName || stored?.ticket?.typeName || null;
+  const caseRecordType = r.Ticket__r?.RecordType?.Name || stored?.recordType || stored?.ticket?.recordType || null;
+  const ticketOpenedAt = r.Ticket__r?.CreatedDate || stored?.createdDate || stored?.ticket?.createdDate || null;
+  const accountLat = r.Account__r?.MALatitude__c ?? stored?.accountLat ?? stored?.ticket?.accountLat ?? null;
+  const accountLng = r.Account__r?.MALongitude__c ?? stored?.accountLng ?? stored?.ticket?.accountLng ?? null;
+
   return {
     id: r.Id,
     name: r.Name,
@@ -218,11 +228,16 @@ function toNotification(r) {
     reason: r.Reason__c,
     accountId: r.Account__c,
     accountName: r.Account__r?.Name || null,
+    accountLat,
+    accountLng,
     googleRouteId: r.Google_Route__c,
     googleRouteName: r.Google_Route__r?.Name || null,
     ticketId: r.Ticket__c,
     caseNumber: r.Ticket__r?.CaseNumber || null,
     ticketSubject: r.Ticket__r?.Subject || null,
+    ticketType,
+    caseRecordType,
+    ticketOpenedAt,
     acceptedBy: r.Accepted_By__c || null,
     acceptedAt: r.Accepted_Date__c || null,
   };

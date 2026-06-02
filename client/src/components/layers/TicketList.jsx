@@ -3,6 +3,8 @@ import useStore from '../../store';
 import * as routingApi from '../../api/routing';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import TicketDetailFields from '../shared/TicketDetailFields';
+import { ticketHasCoords, ticketLat, ticketLng, ticketNotes } from '../../utils/ticket';
 
 const TICKET_COLORS = {
   'Deliver Container': '#2563eb',
@@ -20,8 +22,7 @@ const TICKET_COLORS = {
 
 /** Groups tickets by Description (Case Type) and renders collapsible sections with Add button */
 export default function TicketList({ tickets = [] }) {
-  const setMapCenter = useStore((st) => st.setMapCenter);
-  const setMapZoom = useStore((st) => st.setMapZoom);
+  const showTicketOnMap = useStore((st) => st.showTicketOnMap);
   const storeRouteId = useStore((st) => st.routeId);
   const routes = useStore((st) => st.routes);
   const sfInstanceUrl = useStore((st) => st.sfInstanceUrl);
@@ -116,43 +117,53 @@ export default function TicketList({ tickets = [] }) {
                     className="flex items-center gap-2 px-3 py-2 hover:bg-bg/30 transition"
                   >
                     {/* Clickable account info */}
-                    <button
-                      className="flex-1 min-w-0 text-left"
-                      onClick={() => {
-                        if (t.MALatitude__c && t.MALongitude__c) {
-                          setMapCenter({ lat: Number(t.MALatitude__c), lng: Number(t.MALongitude__c) });
-                          setMapZoom(14);
-                        }
-                      }}
-                    >
+                    <div className="flex-1 min-w-0">
                       <a
                         href={sfInstanceUrl && t.Id ? `${sfInstanceUrl}/${t.Id}` : '#'}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="font-medium text-[13px] text-primary truncate hover:underline block"
-                        onClick={(e) => e.stopPropagation()}
                       >
                         {t.Name ?? 'Account'}
                       </a>
                       <div className="text-[11px] text-txt-secondary truncate">
                         {[t.ShippingStreet, t.ShippingCity, t.ShippingState].filter(Boolean).join(', ')}
                       </div>
-                      {t.Notes__c && (
+                      <TicketDetailFields ticket={t} />
+                      {ticketNotes(t) && (
                         <div className="text-[10px] text-txt-secondary truncate mt-0.5 italic">
-                          {t.Notes__c}
+                          {ticketNotes(t)}
                         </div>
                       )}
-                    </button>
+                    </div>
 
-                    {/* Add button */}
-                    <button
-                      className="shrink-0 px-2.5 py-1 text-[11px] font-semibold rounded bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition"
-                      onClick={(e) => { e.stopPropagation(); handleAdd(t); }}
-                      disabled={adding === t.Id || !routeId}
-                      title={routeId ? 'Add to selected route' : 'Select a route first'}
-                    >
-                      {adding === t.Id ? '…' : 'Add'}
-                    </button>
+                    <div className="flex shrink-0 flex-col gap-1">
+                      {ticketHasCoords(t) && (
+                        <button
+                          type="button"
+                          className="px-2.5 py-1 text-[11px] font-semibold rounded border border-primary text-primary hover:bg-primary/5 transition"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            showTicketOnMap({
+                              accountId: t.Id,
+                              lat: ticketLat(t),
+                              lng: ticketLng(t),
+                            });
+                          }}
+                        >
+                          Show on map
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded bg-primary text-white hover:bg-primary/90 disabled:opacity-40 transition"
+                        onClick={(e) => { e.stopPropagation(); handleAdd(t); }}
+                        disabled={adding === t.Id || !routeId}
+                        title={routeId ? 'Add to selected route' : 'Select a route first'}
+                      >
+                        {adding === t.Id ? '…' : 'Add'}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

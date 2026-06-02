@@ -1,9 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Marker, InfoWindow } from '@react-google-maps/api';
 import useStore from '../../store';
 import * as routingApi from '../../api/routing';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import TicketDetailFields from '../shared/TicketDetailFields';
+import { ticketHasCoords, ticketLat, ticketLng, ticketNotes } from '../../utils/ticket';
 
 const TICKET_COLORS = {
   'Deliver Container': '#2563eb',
@@ -18,13 +20,6 @@ const TICKET_COLORS = {
   'UCO Collection': '#f97316',
 };
 
-function hasValidCoords(t) {
-  const lat = Number(t.MALatitude__c);
-  const lng = Number(t.MALongitude__c);
-  return !isNaN(lat) && !isNaN(lng) && !(lat === 0 && lng === 0)
-    && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
-}
-
 /** Ticket markers on map — Account objects with Description = ticket type */
 export default function TicketLayer({ tickets = [] }) {
   const [selected, setSelected] = useState(null);
@@ -33,7 +28,19 @@ export default function TicketLayer({ tickets = [] }) {
   const routeId = useStore((s) => s.routeId);
   const route = useStore((s) => s.route);
   const refreshRoutes = useStore((s) => s.refreshRoutes);
+  const focusTicketId = useStore((s) => s.focusTicketId);
+  const clearFocusTicket = useStore((s) => s.clearFocusTicket);
+  const showTicketOnMap = useStore((s) => s.showTicketOnMap);
   const handleClose = useCallback(() => setSelected(null), []);
+
+  useEffect(() => {
+    if (!focusTicketId) return;
+    const match = tickets.find((t) => t.Id === focusTicketId);
+    if (match && ticketHasCoords(match)) {
+      setSelected(match);
+    }
+    clearFocusTicket();
+  }, [focusTicketId, tickets, clearFocusTicket]);
 
   const handleAdd = useCallback(async (ticket) => {
     if (!routeId) return;
@@ -53,7 +60,20 @@ export default function TicketLayer({ tickets = [] }) {
     }
   }, [routeId, refreshRoutes]);
 
-  const valid = tickets.filter(hasValidCoords);
+  const handleShowOnMap = useCallback((ticket) => {
+    if (!ticketHasCoords(ticket)) {
+      toast.info('This ticket has no map coordinates.');
+      return;
+    }
+    showTicketOnMap({
+      accountId: ticket.Id,
+      lat: ticketLat(ticket),
+      lng: ticketLng(ticket),
+    });
+    setSelected(ticket);
+  }, [showTicketOnMap]);
+
+  const valid = tickets.filter(ticketHasCoords);
 
   return (
     <>
@@ -62,7 +82,7 @@ export default function TicketLayer({ tickets = [] }) {
         return (
           <Marker
             key={t.Id ?? i}
-            position={{ lat: Number(t.MALatitude__c), lng: Number(t.MALongitude__c) }}
+            position={{ lat: Number(ticketLat(t)), lng: Number(ticketLng(t)) }}
             onClick={() => setSelected(t)}
             icon={{
               path: window.google?.maps?.SymbolPath?.BACKWARD_CLOSED_ARROW ?? 3,
@@ -78,7 +98,7 @@ export default function TicketLayer({ tickets = [] }) {
 
       {selected && (
         <InfoWindow
-          position={{ lat: Number(selected.MALatitude__c), lng: Number(selected.MALongitude__c) }}
+          position={{ lat: Number(ticketLat(selected)), lng: Number(ticketLng(selected)) }}
           onCloseClick={handleClose}
         >
           <div style={{ fontFamily: 'sans-serif', fontSize: 13, minWidth: 200 }}>
@@ -90,22 +110,44 @@ export default function TicketLayer({ tickets = [] }) {
               onMouseEnter={(e) => { e.target.style.textDecoration = 'underline'; }}
               onMouseLeave={(e) => { e.target.style.textDecoration = 'none'; }}
             >{selected.Name ?? 'Account'}</a>
-            {selected.ShippingStreet && <div style={{ fontSize: 12, color: '#666', marginBottom: 2 }}><strong>Address:</strong> {selected.ShippingStreet}{selected.ShippingCity ? `, ${selected.ShippingCity}` : ''}{selected.ShippingState ? `, ${selected.ShippingState}` : ''}</div>}
-            {selected.Description && <div style={{ fontSize: 12 }}><strong>Ticket Type:</strong> {selected.Description}</div>}
-            {selected.Notes__c && <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{selected.Notes__c}</div>}
-            {routeId && (
+            {selected.ShippingStreet && (
+              <div style={{ fontSize: 12, color: '#666', marginBottom: 2 }}>
+                <strong>Address:</strong> {selected.ShippingStreet}
+                {selected.ShippingCity ? `, ${selected.ShippingCity}` : ''}
+                {selected.ShippingState ? `, ${selected.ShippingState}` : ''}
+              </div>
+            )}
+            <TicketDetailFields ticket={selected} variant="popup" />
+            {ticketNotes(selected) && (
+              <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{ticketNotes(selected)}</div>
+            )}
+            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               <button
-                onClick={() => handleAdd(selected)}
-                disabled={adding}
+                type="button"
+                onClick={() => handleShowOnMap(selected)}
                 style={{
-                  marginTop: 8, padding: '5px 14px', fontSize: 12, fontWeight: 600,
-                  color: '#fff', background: '#2563eb', border: 'none', borderRadius: 6,
-                  cursor: adding ? 'wait' : 'pointer', opacity: adding ? 0.6 : 1,
+                  padding: '5px 14px', fontSize: 12, fontWeight: 600,
+                  color: '#2563eb', background: '#fff', border: '1px solid #2563eb', borderRadius: 6,
+                  cursor: 'pointer',
                 }}
               >
-                {adding ? 'Adding…' : `Add to ${route?.Name || 'Route'}`}
+                Show on map
               </button>
-            )}
+              {routeId && (
+                <button
+                  type="button"
+                  onClick={() => handleAdd(selected)}
+                  disabled={adding}
+                  style={{
+                    padding: '5px 14px', fontSize: 12, fontWeight: 600,
+                    color: '#fff', background: '#2563eb', border: 'none', borderRadius: 6,
+                    cursor: adding ? 'wait' : 'pointer', opacity: adding ? 0.6 : 1,
+                  }}
+                >
+                  {adding ? 'Adding…' : `Add to ${route?.Name || 'Route'}`}
+                </button>
+              )}
+            </div>
           </div>
         </InfoWindow>
       )}

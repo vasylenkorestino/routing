@@ -12,3 +12,17 @@ export const formatDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-');
   return `${m}/${d}/${y}`;
 };
+
+/** Formats an ISO datetime for ticket "Date/Time Opened" display */
+export const formatDateTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};

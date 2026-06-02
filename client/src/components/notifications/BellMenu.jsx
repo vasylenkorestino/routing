@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import useStore from '../../store';
+import * as routingApi from '../../api/routing';
 import { toast } from '../ui/Toast';
+import TicketDetailFields from '../shared/TicketDetailFields';
+import { ticketHasCoords } from '../../utils/ticket';
 
 /** Friendly labels for the closed/started reasons surfaced by the Apex/Node skill. */
 const LOCK_LABELS = {
@@ -50,6 +53,10 @@ export default function BellMenu() {
   const acceptNotification = useStore((s) => s.acceptNotification);
   const declineNotification = useStore((s) => s.declineNotification);
   const selectRoute = useStore((s) => s.selectRoute);
+  const showTicketOnMap = useStore((s) => s.showTicketOnMap);
+  const setLayerData = useStore((s) => s.setLayerData);
+  const layers = useStore((s) => s.layers);
+  const recordType = useStore((s) => s.recordType);
   const isStreamConnected = useStore((s) => s.isStreamConnected);
 
   const [open, setOpen] = useState(false);
@@ -168,6 +175,27 @@ export default function BellMenu() {
                 onMarkRead={() => markRead(n.id)}
                 onAccept={() => onAccept(n)}
                 onDecline={() => onDecline(n)}
+                onShowOnMap={async () => {
+                  if (!ticketHasCoords(n)) {
+                    toast.info('This ticket has no map coordinates.');
+                    return;
+                  }
+                  if (layers.tickets.data.length === 0) {
+                    try {
+                      const data = await routingApi.getTickets({ recordTypeName: recordType });
+                      const tickets = Array.isArray(data) ? data : data.tickets ?? [];
+                      setLayerData('tickets', tickets);
+                    } catch {
+                      /* map pan still works without layer data */
+                    }
+                  }
+                  showTicketOnMap({
+                    accountId: n.accountId,
+                    lat: n.accountLat,
+                    lng: n.accountLng,
+                  });
+                  setOpen(false);
+                }}
               />
             ))}
           </div>
@@ -178,7 +206,7 @@ export default function BellMenu() {
 }
 
 /** Single notification card — reason text, route chip, accept/decline + read actions. */
-function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAccept, onDecline }) {
+function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAccept, onDecline, onShowOnMap }) {
   const isAdd = n.type === 'Ticket Triage - Add To Route';
   const accent = isAdd ? 'text-emerald-600' : 'text-ai';
   const accentBg = isAdd ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-ai/10 border-ai/30 text-ai';
@@ -216,9 +244,10 @@ function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAc
           <div className="mt-1 text-[13px] text-txt font-semibold break-words">
             {n.accountName || n.caseNumber || 'Ticket'}
           </div>
-          {n.caseNumber && n.accountName && (
+          {n.caseNumber && (
             <div className="text-[11px] text-txt-secondary">Case {n.caseNumber}</div>
           )}
+          <TicketDetailFields ticket={n} />
 
           {/* Highlighted route chip */}
           <button
@@ -281,50 +310,46 @@ function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAc
           )}
 
           {/* Actions row */}
-          {isProposed && !isLocked && (
-            <div className="mt-2 flex items-center gap-2 flex-wrap">
-              {canAct && (
-                <>
-                  <button
-                    type="button"
-                    onClick={onAccept}
-                    disabled={isPending}
-                    className="px-2.5 py-1 rounded-md bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {n._pending === 'accept' ? 'Accepting…' : 'Accept'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onDecline}
-                    disabled={isPending}
-                    className="px-2.5 py-1 rounded-md border border-border text-txt text-[11px] font-semibold hover:bg-bg disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {n._pending === 'decline' ? 'Declining…' : 'Decline'}
-                  </button>
-                </>
-              )}
-              {!n.readAt && (
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            {ticketHasCoords(n) && (
+              <button
+                type="button"
+                onClick={onShowOnMap}
+                className="px-2.5 py-1 rounded-md border border-primary text-primary text-[11px] font-semibold hover:bg-primary/5"
+              >
+                Show on map
+              </button>
+            )}
+            {isProposed && !isLocked && canAct && (
+              <>
                 <button
                   type="button"
-                  onClick={onMarkRead}
-                  className="text-[11px] text-txt-secondary hover:text-primary ml-auto"
+                  onClick={onAccept}
+                  disabled={isPending}
+                  className="px-2.5 py-1 rounded-md bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Mark as read
+                  {n._pending === 'accept' ? 'Accepting…' : 'Accept'}
                 </button>
-              )}
-            </div>
-          )}
-          {!isProposed && !n.readAt && (
-            <div className="mt-2 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onDecline}
+                  disabled={isPending}
+                  className="px-2.5 py-1 rounded-md border border-border text-txt text-[11px] font-semibold hover:bg-bg disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {n._pending === 'decline' ? 'Declining…' : 'Decline'}
+                </button>
+              </>
+            )}
+            {!n.readAt && (
               <button
                 type="button"
                 onClick={onMarkRead}
-                className="text-[11px] text-txt-secondary hover:text-primary"
+                className="text-[11px] text-txt-secondary hover:text-primary ml-auto"
               >
                 Mark as read
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>

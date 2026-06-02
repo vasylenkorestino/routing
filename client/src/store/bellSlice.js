@@ -167,11 +167,16 @@ const bellSlice = (set, get) => ({
             reason: payload.reason,
             accountId: payload.accountId,
             accountName: payload.accountName,
+            accountLat: payload.accountLat ?? null,
+            accountLng: payload.accountLng ?? null,
             googleRouteId: payload.googleRouteId,
             googleRouteName: payload.googleRouteName || null,
             ticketId: payload.ticketId,
             caseNumber: payload.caseNumber,
             ticketSubject: null,
+            ticketType: payload.ticketType || null,
+            caseRecordType: payload.caseRecordType || null,
+            ticketOpenedAt: payload.ticketOpenedAt || null,
             parentLogId: payload.parentLogId || null,
           });
         } catch (err) {

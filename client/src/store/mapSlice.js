@@ -10,6 +10,27 @@ const mapSlice = (set, get) => ({
   selectedShapeId: null,
   mapCenter: { lat: 33.749, lng: -84.388 },
   mapZoom: 7,
+  /** Account Id to focus on the map (opens ticket info window when layer is visible) */
+  focusTicketId: null,
+
+  /** Pans the map to a ticket and optionally opens its marker popup */
+  showTicketOnMap: ({ accountId, lat, lng }) => {
+    const id = accountId;
+    const latitude = Number(lat);
+    const longitude = Number(lng);
+    if (!id || Number.isNaN(latitude) || Number.isNaN(longitude)) return;
+    set((s) => ({
+      mapCenter: { lat: latitude, lng: longitude },
+      mapZoom: 14,
+      focusTicketId: id,
+      layers: {
+        ...s.layers,
+        tickets: { ...s.layers.tickets, visible: true },
+      },
+    }));
+  },
+
+  clearFocusTicket: () => set({ focusTicketId: null }),
 
   toggleLayer: (name) =>
     set((s) => ({
