@@ -1,11 +1,11 @@
 import { formatDateTime } from './date';
 
-/** Ticket type label — Description holds Case.Type from the tickets API */
+/** Ticket type label — Case.Type (e.g. UCO Collection) or open-tickets API Description */
 export function ticketTypeLabel(ticket) {
-  return ticket?.ticketType || ticket?.Description || '';
+  return ticket?.ticketType || ticket?.type || ticket?.Type || ticket?.typeName || ticket?.Description || '';
 }
 
-/** Case record type (LRS, EZG, etc.) */
+/** Case record type (EZG, ENJ, etc.) */
 export function ticketRecordType(ticket) {
   return ticket?.caseRecordType || ticket?.CaseRecordType || ticket?.recordType || '';
 }

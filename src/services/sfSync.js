@@ -13,7 +13,8 @@
  */
 
 const { getConnection } = require('./salesforce');
-const { triageTicket } = require('./ticketTriage');
+const { triageTicket, isUcoTicket } = require('./ticketTriage');
+const { ticketRecordTypeName } = require('../utils/ticketTriageRules');
 const { publish, EVENT_SF_CHANGED } = require('./notificationBus');
 const logger = require('../utils/logger');
 
@@ -23,6 +24,20 @@ const logger = require('../utils/logger');
 async function handleCaseCreated(records) {
   for (const ticket of records) {
     if (!ticket?.id) continue;
+    if (!isUcoTicket(ticket)) {
+      logger.info('[sfSync] skipping triage for non-UCO ticket', {
+        ticketId: ticket.id,
+        type: ticket.type || ticket.typeName,
+      });
+      continue;
+    }
+    if (!ticketRecordTypeName(ticket)) {
+      logger.info('[sfSync] skipping triage for unsupported record type', {
+        ticketId: ticket.id,
+        recordType: ticket.recordType,
+      });
+      continue;
+    }
     setImmediate(async () => {
       try {
         await triageTicket(ticket);

@@ -5,23 +5,35 @@ const { logErrorToSalesforce } = require('./errorLogger');
 const { publish, EVENT_TICKET_TRIAGED } = require('./notificationBus');
 const { evaluateRoute } = require('../skills/routeReadiness');
 const logger = require('../utils/logger');
+const {
+  isUcoTicket,
+  ticketRecordTypeName,
+  accountServiceLocationId,
+  routeMatchesTicketContext,
+  escapeSoql,
+} = require('../utils/ticketTriageRules');
 
 const SKILL_NAME = 'Ticket Triage';
 const TYPE_ADD = 'Ticket Triage - Add To Route';
 const TYPE_NEW = 'Ticket Triage - New Route Suggested';
 
 const TRIAGE_SYSTEM = `You are a routing dispatcher for a UCO (Used Cooking Oil) collection company.
-A new ticket (Case) has just been created. You must decide the best route to service it.
+A new UCO Collection ticket (Case) has just been created. You must decide the best route to service it.
 
 You will receive JSON with:
-- ticket: the Case (account, geo, ticket type, future service date, notes)
-- account: the customer account (geo, last service, frequency, shape)
-- candidateRoutes: existing Google_Route__c records that could service the ticket (id, name, service date, driver, stop count, isAI, geo center)
+- ticket: the Case (record type EZG or ENJ, account, geo, service date, notes)
+- account: the customer account (service location depot, geo, last service, frequency, shape)
+- candidateRoutes: existing Google_Route__c records that ALREADY match the ticket record type and the account service location (depot)
+
+HARD RULES (already enforced in candidateRoutes — do not violate):
+1. EZG tickets may only use EZG routes; ENJ tickets may only use ENJ routes.
+2. The route must use the same service location (depot) as the account — never mix cities/regions (e.g. Miami vs New York).
+3. Only UCO Collection tickets are triaged; container/grease tickets are out of scope.
 
 YOUR TASKS:
 1. Decide whether to add the ticket to one of the candidateRoutes or recommend creating a new route.
 2. Prefer adding to an existing route on/near the ticket's required service date when geographically reasonable.
-3. Recommend a new route only if no candidate is appropriate (wrong area, wrong date, or none provided).
+3. Recommend a new route only if no candidate is appropriate (wrong date, or none provided).
 
 Return ONLY valid JSON with this shape:
 {
@@ -48,14 +60,42 @@ async function triageTicket(ticket, options = {}) {
     logger.warn('[ticketTriage] missing ticket id; skipping');
     return null;
   }
+  if (!isUcoTicket(ticket)) {
+    logger.info('[ticketTriage] skipping non-UCO ticket', {
+      ticketId: ticket.id,
+      type: ticket.type || ticket.typeName,
+    });
+    return null;
+  }
+
   const { excludeRouteIds = [], parentLogId = null } = options;
+  const ticketRt = ticketRecordTypeName(ticket);
+  if (!ticketRt) {
+    logger.info('[ticketTriage] skipping unsupported record type', {
+      ticketId: ticket.id,
+      recordType: ticket.recordType,
+    });
+    return null;
+  }
 
   try {
     const conn = await getConnection();
     const account = await loadAccount(conn, ticket.accountId);
-    const candidates = await loadCandidateRoutes(conn, ticket, account, excludeRouteIds);
+    const serviceLocId = accountServiceLocationId(account, ticket);
+    const candidates = await loadCandidateRoutes(conn, ticket, account, {
+      ticketRecordType: ticketRt,
+      serviceLocationId: serviceLocId,
+      excludeRouteIds,
+    });
 
-    const decision = await askClaude({ ticket, account, candidates });
+    if (!serviceLocId) {
+      logger.warn('[ticketTriage] account has no RelatedServiceLocation__c; no route candidates', {
+        ticketId: ticket.id,
+        accountId: ticket.accountId,
+      });
+    }
+
+    const decision = await askClaude({ ticket, account, candidates, ticketRecordType: ticketRt, serviceLocationId: serviceLocId });
     const matchedRoute = decision.googleRouteId
       ? candidates.find((c) => c.id === decision.googleRouteId)
       : null;
@@ -80,35 +120,47 @@ async function triageTicket(ticket, options = {}) {
 
 async function loadAccount(conn, accountId) {
   if (!accountId) return null;
+  const safeId = escapeSoql(accountId);
   const soql = `
     SELECT Id, Name, MALatitude__c, MALongitude__c, Shape__c,
            Last_Service_Date__c, Pickup_Frequency_in_Days__c,
-           Ignore_For_Routing__c, Notes__c, Route_Notes__c
-    FROM Account WHERE Id = '${accountId}'
+           Ignore_For_Routing__c, Notes__c, Route_Notes__c,
+           RelatedServiceLocation__c, AccountServiceLocation__c,
+           RecordType.Name
+    FROM Account WHERE Id = '${safeId}'
   `;
   const res = await conn.query(soql);
   return res.records[0] || null;
 }
 
-async function loadCandidateRoutes(conn, ticket, account, excludeRouteIds = []) {
+async function loadCandidateRoutes(conn, ticket, account, { ticketRecordType, serviceLocationId, excludeRouteIds = [] }) {
   const targetDate = ticket.futureServiceDate
     ? toIsoDate(ticket.futureServiceDate)
     : toIsoDate(new Date().toISOString());
 
   const filters = [`Service_Date__c >= ${shiftDate(targetDate, 0)}`, `Service_Date__c <= ${shiftDate(targetDate, 7)}`];
+
+  if (ticketRecordType) {
+    filters.push(`RecordType.Name = '${escapeSoql(ticketRecordType)}'`);
+  }
+  if (serviceLocationId) {
+    const loc = escapeSoql(serviceLocationId);
+    filters.push(`(Service_Location_Start__c = '${loc}' OR Service_Location_End__c = '${loc}')`);
+  }
   if (account?.Shape__c) {
-    filters.push(`(Shape__c = '${account.Shape__c}' OR Shape__c = null)`);
+    filters.push(`(Shape__c = '${escapeSoql(account.Shape__c)}' OR Shape__c = null)`);
   }
   if (Array.isArray(excludeRouteIds) && excludeRouteIds.length > 0) {
     const inList = excludeRouteIds
       .filter(Boolean)
-      .map((id) => `'${String(id).replace(/'/g, "\\'")}'`)
+      .map((id) => `'${escapeSoql(id)}'`)
       .join(',');
     if (inList) filters.push(`Id NOT IN (${inList})`);
   }
 
   const soql = `
     SELECT Id, Name, Service_Date__c, Driver__c, DriverName__c, Shape__c,
+           RecordType.Name,
            Service_Location_Start__c, Service_Location_End__c,
            CompletionStatus__c, isAI__c, isAIApproved__c, Accounts__c,
            Driver_Completed__c, isLocked__c,
@@ -133,22 +185,28 @@ async function loadCandidateRoutes(conn, ticket, account, excludeRouteIds = []) 
       ticketId: ticket.id,
     });
   }
-  return open.map((r) => ({
+
+  const mapped = open.map((r) => ({
     id: r.Id,
     name: r.Name,
     serviceDate: r.Service_Date__c,
     driverId: r.Driver__c,
     driverName: r.DriverName__c,
     shapeId: r.Shape__c,
+    recordTypeName: r.RecordType?.Name || null,
+    serviceLocationStartId: r.Service_Location_Start__c,
+    serviceLocationEndId: r.Service_Location_End__c,
     completion: r.CompletionStatus__c,
     isAI: r.isAI__c,
     accountIds: (r.Accounts__c || '').split(',').filter(Boolean),
   }));
+
+  return mapped.filter((r) => routeMatchesTicketContext(r, ticketRecordType, serviceLocationId));
 }
 
-async function askClaude({ ticket, account, candidates }) {
+async function askClaude({ ticket, account, candidates, ticketRecordType, serviceLocationId }) {
   if (!config.apiKey) {
-    return defaultDecision(candidates);
+    return defaultDecision(candidates, { ticketRecordType, serviceLocationId });
   }
   const client = new Anthropic({ apiKey: config.apiKey });
   const payload = {
@@ -157,6 +215,7 @@ async function askClaude({ ticket, account, candidates }) {
       caseNumber: ticket.caseNumber,
       subject: ticket.subject,
       recordType: ticket.recordType,
+      type: ticket.type || ticket.typeName,
       accountId: ticket.accountId,
       accountLat: ticket.accountLat,
       accountLng: ticket.accountLng,
@@ -166,8 +225,16 @@ async function askClaude({ ticket, account, candidates }) {
       notes: ticket.notes,
       typeName: ticket.typeName,
     },
-    account,
+    account: account ? {
+      ...account,
+      serviceLocationId: accountServiceLocationId(account, ticket),
+      serviceLocationName: account.AccountServiceLocation__c,
+    } : null,
     candidateRoutes: candidates,
+    matchingRules: {
+      ticketRecordType,
+      serviceLocationId,
+    },
   };
 
   let response;
@@ -180,51 +247,59 @@ async function askClaude({ ticket, account, candidates }) {
     });
   } catch (err) {
     logger.error('[ticketTriage] Claude call failed', { error: err.message });
-    return defaultDecision(candidates);
+    return defaultDecision(candidates, { ticketRecordType, serviceLocationId });
   }
 
   const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
   try {
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
-    return normalizeDecision(parsed, candidates);
+    return normalizeDecision(parsed, candidates, { ticketRecordType, serviceLocationId });
   } catch {
     logger.warn('[ticketTriage] could not parse Claude response, using fallback', { text: text.slice(0, 500) });
-    return defaultDecision(candidates);
+    return defaultDecision(candidates, { ticketRecordType, serviceLocationId });
   }
 }
 
-function defaultDecision(candidates) {
-  if (candidates && candidates.length > 0) {
-    const first = candidates[0];
+function defaultDecision(candidates, ctx = {}) {
+  const eligible = (candidates || []).filter((c) =>
+    routeMatchesTicketContext(c, ctx.ticketRecordType, ctx.serviceLocationId),
+  );
+  if (eligible.length > 0) {
+    const first = eligible[0];
+    const locNote = ctx.serviceLocationId ? 'same service location' : 'matching record type';
     return {
       decision: 'addToRoute',
       googleRouteId: first.id,
       suggestedDate: first.serviceDate || null,
       suggestedDriverId: first.driverId || null,
       confidence: 40,
-      reason: 'Heuristic fallback: nearest upcoming candidate route by service date.',
+      reason: `Heuristic fallback: nearest upcoming ${first.recordTypeName || ''} route (${locNote}) by service date.`,
     };
   }
+  const rt = ctx.ticketRecordType || 'matching';
   return {
     decision: 'newRoute',
     googleRouteId: null,
     suggestedDate: null,
     suggestedDriverId: null,
     confidence: 30,
-    reason: 'No candidate routes available; new route suggested.',
+    reason: `No open ${rt} routes at this account's service location; new route suggested.`,
   };
 }
 
-function normalizeDecision(d, candidates) {
+function normalizeDecision(d, candidates, ctx = {}) {
   const decision = d.decision === 'newRoute' ? 'newRoute' : 'addToRoute';
   let googleRouteId = d.googleRouteId || null;
+  const eligible = (candidates || []).filter((c) =>
+    routeMatchesTicketContext(c, ctx.ticketRecordType, ctx.serviceLocationId),
+  );
   if (decision === 'addToRoute' && googleRouteId) {
-    const ok = candidates.some((c) => c.id === googleRouteId);
-    if (!ok) googleRouteId = candidates[0]?.id || null;
+    const ok = eligible.some((c) => c.id === googleRouteId);
+    if (!ok) googleRouteId = eligible[0]?.id || null;
   }
   if (decision === 'addToRoute' && !googleRouteId) {
-    return defaultDecision(candidates);
+    return defaultDecision(candidates, ctx);
   }
   return {
     decision,
@@ -265,7 +340,7 @@ async function createRouteLog(conn, ticket, decision, matchedRoute, parentLogId 
       accountName: ticket.accountName,
       accountLat: ticket.accountLat,
       accountLng: ticket.accountLng,
-      ticketType: ticket.typeName || null,
+      ticketType: ticket.typeName || ticket.type || null,
       caseRecordType: ticket.recordType || null,
       ticketOpenedAt: ticket.createdDate || null,
       googleRouteId: decision.googleRouteId,
@@ -312,4 +387,4 @@ function clampNumber(n, min, max, fallback) {
   return Math.min(max, Math.max(min, num));
 }
 
-module.exports = { triageTicket };
+module.exports = { triageTicket, isUcoTicket };
