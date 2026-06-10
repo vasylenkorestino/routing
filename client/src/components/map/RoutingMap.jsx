@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GoogleMap, useLoadScript, Marker, InfoWindow } from '@react-google-maps/api';
 import useStore from '../../store';
+import { decodeRoutePolyline, isValidCoord } from '../../utils/routePolyline';
 import RouteLayer from './RouteLayer';
 import TicketLayer from './TicketLayer';
 import ShapeLayer from './ShapeLayer';
@@ -32,12 +33,7 @@ export default function RoutingMap() {
 
     const stops = route.Routes__r?.records ?? route.Routes__r ?? [];
     const coords = stops
-      .filter((s) => {
-        const lat = Number(s.Latitude__c);
-        const lng = Number(s.Longitude__c);
-        return !isNaN(lat) && !isNaN(lng) && !(lat === 0 && lng === 0)
-          && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
-      })
+      .filter((s) => isValidCoord(Number(s.Latitude__c), Number(s.Longitude__c)))
       .map((s) => ({ lat: Number(s.Latitude__c), lng: Number(s.Longitude__c) }));
 
     if (coords.length === 0) return;
@@ -51,12 +47,8 @@ export default function RoutingMap() {
     const bounds = new google.maps.LatLngBounds();
     coords.forEach((c) => bounds.extend(c));
 
-    if (route.Polyline__c && google.maps.geometry) {
-      try {
-        const path = google.maps.geometry.encoding.decodePath(route.Polyline__c);
-        path.forEach((p) => bounds.extend(p));
-      } catch { /* skip */ }
-    }
+    const polyPath = decodeRoutePolyline(route.Polyline__c, { anchors: coords });
+    polyPath.forEach((p) => bounds.extend(p));
 
     map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
   }, [route]);

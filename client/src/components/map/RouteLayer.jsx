@@ -3,14 +3,10 @@ import { Marker } from '@react-google-maps/api';
 import { useGoogleMap } from '@react-google-maps/api';
 import useStore from '../../store';
 import StopInfoWindow from './StopInfoWindow';
+import { decodeRoutePolyline, isValidCoord } from '../../utils/routePolyline';
 
 function hasValidCoords(s) {
-  const lat = Number(s.Latitude__c);
-  const lng = Number(s.Longitude__c);
-  return !isNaN(lat) && !isNaN(lng)
-    && !(lat === 0 && lng === 0)
-    && lat >= -90 && lat <= 90
-    && lng >= -180 && lng <= 180;
+  return isValidCoord(Number(s.Latitude__c), Number(s.Longitude__c));
 }
 
 function slCoord(sl) {
@@ -21,21 +17,26 @@ function slCoord(sl) {
   return { lat, lng };
 }
 
-function getStopsAndPolyline(route) {
+function getStopsAndPolyline(route, startPt, endPt) {
   const allStops = route.Routes__r?.records ?? route.Routes__r ?? [];
   const stops = allStops
     .filter(hasValidCoords)
     .sort((a, b) => (a.Priority__c ?? 0) - (b.Priority__c ?? 0));
 
-  let polyPath = [];
-  if (route.Polyline__c && window.google?.maps?.geometry) {
-    try {
-      const d = google.maps.geometry.encoding.decodePath(route.Polyline__c);
-      polyPath = d.map((p) => ({ lat: p.lat(), lng: p.lng() }));
-    } catch (e) {
-      console.warn(`[RouteLayer] polyline decode failed for ${route.Name}:`, e);
-    }
+  const anchors = [
+    ...stops.map((s) => ({ lat: Number(s.Latitude__c), lng: Number(s.Longitude__c) })),
+    ...(startPt ? [startPt] : []),
+    ...(endPt ? [endPt] : []),
+  ];
+
+  const polyPath = route.Polyline__c
+    ? decodeRoutePolyline(route.Polyline__c, { anchors })
+    : [];
+
+  if (route.Polyline__c && polyPath.length < 2) {
+    console.warn(`[RouteLayer] polyline unusable for ${route.Name}; using driving directions`);
   }
+
   return { stops, polyPath };
 }
 
@@ -187,7 +188,7 @@ function SingleRoute({ route, onSelectStop }) {
   const startPt = slCoord(startSL);
   const endPt = slCoord(endSL);
 
-  const { stops, polyPath } = getStopsAndPolyline(route);
+  const { stops, polyPath } = getStopsAndPolyline(route, startPt, endPt);
   const hasPolyline = polyPath.length >= 2;
 
   const { startPath, endPath, fullPath } = useDrivingPaths(id, startPt, endPt, stops, hasPolyline);
