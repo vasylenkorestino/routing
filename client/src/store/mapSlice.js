@@ -1,3 +1,19 @@
+/** Maps a bell notification to a single Account-shaped ticket for TicketLayer. */
+function notificationToTicket(n) {
+  return {
+    Id: n.accountId,
+    Name: n.accountName || n.caseNumber || 'Ticket',
+    MALatitude__c: n.accountLat,
+    MALongitude__c: n.accountLng,
+    Description: n.ticketType || 'UCO Collection',
+    caseRecordType: n.caseRecordType,
+    ticketOpenedAt: n.ticketOpenedAt,
+    caseNumber: n.caseNumber,
+    ticketSubject: n.ticketSubject,
+    ticketType: n.ticketType,
+  };
+}
+
 /** Map slice — layer visibility, per-route visibility, map viewport */
 const mapSlice = (set, get) => ({
   layers: {
@@ -12,6 +28,8 @@ const mapSlice = (set, get) => ({
   mapZoom: 7,
   /** Account Id to focus on the map (opens ticket info window when layer is visible) */
   focusTicketId: null,
+  /** True when tickets layer shows only one notification ticket (not full open-tickets list) */
+  ticketsIsolated: false,
 
   /** Pans the map to a ticket and optionally opens its marker popup */
   showTicketOnMap: ({ accountId, lat, lng }) => {
@@ -29,6 +47,26 @@ const mapSlice = (set, get) => ({
       },
     }));
   },
+
+  /** Shows only the notification ticket on the map (single marker + InfoWindow). */
+  showNotificationTicketOnMap: (notification) => {
+    const ticket = notificationToTicket(notification);
+    const lat = Number(ticket.MALatitude__c);
+    const lng = Number(ticket.MALongitude__c);
+    if (!ticket.Id || Number.isNaN(lat) || Number.isNaN(lng)) return;
+    set((s) => ({
+      ticketsIsolated: true,
+      mapCenter: { lat, lng },
+      mapZoom: 14,
+      focusTicketId: ticket.Id,
+      layers: {
+        ...s.layers,
+        tickets: { visible: true, data: [ticket] },
+      },
+    }));
+  },
+
+  clearTicketsIsolation: () => set({ ticketsIsolated: false }),
 
   clearFocusTicket: () => set({ focusTicketId: null }),
 
@@ -52,6 +90,9 @@ const mapSlice = (set, get) => ({
       const hidden = {};
       data.forEach((r, i) => { if (i > 0) hidden[r.Id ?? r.id] = true; });
       set({ hiddenRouteIds: hidden });
+    }
+    if (name === 'tickets' && data.length !== 1) {
+      set({ ticketsIsolated: false });
     }
   },
 

@@ -161,6 +161,7 @@ function ChatBar({ isChatOpen, toggleChat }) {
 
 export default function RoutingPage() {
   const loadRoutingData = useStore((s) => s.loadRoutingData);
+  const skipNextAutoLoad = useStore((s) => s.skipNextAutoLoad);
   const serviceDate = useStore((s) => s.serviceDate);
   const recordType = useStore((s) => s.recordType);
   const serviceLocation = useStore((s) => s.serviceLocation);
@@ -176,8 +177,9 @@ export default function RoutingPage() {
   const isAIEnhance = useStore((s) => s.isAIEnhance);
 
   useEffect(() => {
+    if (skipNextAutoLoad) return;
     loadRoutingData();
-  }, [serviceDate, recordType, serviceLocation]);
+  }, [serviceDate, recordType, serviceLocation, skipNextAutoLoad]);
 
   useNotificationStream();
 

@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import useStore from '../../store';
-import * as routingApi from '../../api/routing';
 import { toast } from '../ui/Toast';
 import TicketDetailFields from '../shared/TicketDetailFields';
-import { ticketHasCoords } from '../../utils/ticket';
 
 /** Friendly labels for the closed/started reasons surfaced by the Apex/Node skill. */
 const LOCK_LABELS = {
@@ -52,11 +50,7 @@ export default function BellMenu() {
   const markAllRead = useStore((s) => s.markAllRead);
   const acceptNotification = useStore((s) => s.acceptNotification);
   const declineNotification = useStore((s) => s.declineNotification);
-  const selectRoute = useStore((s) => s.selectRoute);
-  const showTicketOnMap = useStore((s) => s.showTicketOnMap);
-  const setLayerData = useStore((s) => s.setLayerData);
-  const layers = useStore((s) => s.layers);
-  const recordType = useStore((s) => s.recordType);
+  const navigateFromNotification = useStore((s) => s.navigateFromNotification);
   const isStreamConnected = useStore((s) => s.isStreamConnected);
 
   const [open, setOpen] = useState(false);
@@ -91,9 +85,8 @@ export default function BellMenu() {
   }, [notifications]);
 
   const goToRoute = async (n) => {
-    if (!n.readAt) await markRead(n.id);
-    if (n.googleRouteId) selectRoute(n.googleRouteId);
     setOpen(false);
+    await navigateFromNotification(n);
   };
 
   const toggleExpand = (id) =>
@@ -175,27 +168,6 @@ export default function BellMenu() {
                 onMarkRead={() => markRead(n.id)}
                 onAccept={() => onAccept(n)}
                 onDecline={() => onDecline(n)}
-                onShowOnMap={async () => {
-                  if (!ticketHasCoords(n)) {
-                    toast.info('This ticket has no map coordinates.');
-                    return;
-                  }
-                  if (layers.tickets.data.length === 0) {
-                    try {
-                      const data = await routingApi.getTickets({ recordTypeName: recordType });
-                      const tickets = Array.isArray(data) ? data : data.tickets ?? [];
-                      setLayerData('tickets', tickets);
-                    } catch {
-                      /* map pan still works without layer data */
-                    }
-                  }
-                  showTicketOnMap({
-                    accountId: n.accountId,
-                    lat: n.accountLat,
-                    lng: n.accountLng,
-                  });
-                  setOpen(false);
-                }}
               />
             ))}
           </div>
@@ -206,7 +178,7 @@ export default function BellMenu() {
 }
 
 /** Single notification card — reason text, route chip, accept/decline + read actions. */
-function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAccept, onDecline, onShowOnMap }) {
+function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAccept, onDecline }) {
   const isAdd = n.type === 'Ticket Triage - Add To Route';
   const accent = isAdd ? 'text-emerald-600' : 'text-ai';
   const accentBg = isAdd ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-ai/10 border-ai/30 text-ai';
@@ -254,7 +226,7 @@ function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAc
             type="button"
             onClick={onGoToRoute}
             className={`mt-2 inline-flex items-center gap-1.5 max-w-full px-2 py-1 rounded-md border text-[12px] font-medium transition hover:brightness-95 ${accentBg}`}
-            title={n.googleRouteId ? 'Open route' : 'No route assigned yet'}
+            title="Open route and show this ticket on map"
           >
             <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l5.447 2.724A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 9m0 8V9m0 0L9 7" />
@@ -311,15 +283,6 @@ function NotificationItem({ n, expanded, onToggle, onGoToRoute, onMarkRead, onAc
 
           {/* Actions row */}
           <div className="mt-2 flex items-center gap-2 flex-wrap">
-            {ticketHasCoords(n) && (
-              <button
-                type="button"
-                onClick={onShowOnMap}
-                className="px-2.5 py-1 rounded-md border border-primary text-primary text-[11px] font-semibold hover:bg-primary/5"
-              >
-                Show on map
-              </button>
-            )}
             {isProposed && !isLocked && canAct && (
               <>
                 <button

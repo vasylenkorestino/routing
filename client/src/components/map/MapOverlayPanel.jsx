@@ -18,13 +18,16 @@ export default function MapOverlayPanel() {
   const toggleLayer = useStore((st) => st.toggleLayer);
   const setLayerData = useStore((st) => st.setLayerData);
   const recordType = useStore((st) => st.recordType);
+  const ticketsIsolated = useStore((st) => st.ticketsIsolated);
+  const clearTicketsIsolation = useStore((st) => st.clearTicketsIsolation);
 
   useEffect(() => {
     if (!open) return;
-    if (selectedLayerTab === 'tickets' && layers.tickets.data.length === 0) {
+    if (selectedLayerTab === 'tickets' && (layers.tickets.data.length === 0 || ticketsIsolated)) {
       setLayerLoading(true);
       routingApi.getTickets({ recordTypeName: recordType }).then((data) => {
         const tickets = Array.isArray(data) ? data : data.tickets ?? [];
+        clearTicketsIsolation();
         setLayerData('tickets', tickets);
         if (!layers.tickets.visible) toggleLayer('tickets');
       }).catch(() => {}).finally(() => setLayerLoading(false));

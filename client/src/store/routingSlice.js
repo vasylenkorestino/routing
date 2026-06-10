@@ -3,6 +3,7 @@ import { getTodayET } from '../utils/date';
 import { toast } from '../components/ui/Toast';
 import { getErrorMessage } from '../utils/error';
 import { applyPointStatusStyle, prepareGoogleRoutes } from '../utils/preparePoints';
+import { ticketHasCoords } from '../utils/ticket';
 
 const ROUTE_COLORS = ['#2563eb', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
@@ -32,9 +33,14 @@ function withPreparedStops(route, stops) {
   return { ...route, points: stops, Routes__r: prepared };
 }
 
-/** Routing slice — route list, filters, and selected route state */
+function normalizeServiceDate(value) {
+  if (!value) return null;
+  const str = String(value);
+  return str.includes('T') ? str.slice(0, 10) : str;
+}
 const routingSlice = (set, get) => ({
   isLoading: false,
+  skipNextAutoLoad: false,
   serviceDate: getTodayET(),
   recordType: 'EZG',
   recordTypes: ['EZG', 'ENJ'],
@@ -58,7 +64,8 @@ const routingSlice = (set, get) => ({
 
   clearAiSelection: () => set({ aiSelectedRouteIds: {} }),
 
-  loadRoutingData: async () => {
+  loadRoutingData: async (options = {}) => {
+    const { selectRouteId = null, skipTicketReset = false, skipDefaultRoute = false } = options;
     const { serviceDate, recordType, serviceLocation } = get();
     set({ isLoading: true });
     try {
@@ -71,24 +78,50 @@ const routingSlice = (set, get) => ({
       const data = await routingApi.getRoutingData(params);
       const routes = normalizeRoutes(data.routes ?? []);
       console.log('[loadRoutingData] response:', { routes: routes.length, drivers: data?.drivers?.length, serviceLocations: data?.serviceLocations?.length });
-      const firstRoute = routes.length > 0 ? routes[0] : null;
+
+      let selectedRoute = null;
+      if (selectRouteId) {
+        selectedRoute = routes.find((r) => (r.Id ?? r.id) === selectRouteId) ?? null;
+      } else if (routes.length > 0 && !skipDefaultRoute) {
+        selectedRoute = routes[0];
+      }
+
       set({
         routes,
         drivers: data.drivers ?? [],
         serviceLocations: data.serviceLocations ?? [],
-        routeId: firstRoute ? (firstRoute.Id ?? firstRoute.id) : null,
-        route: firstRoute,
+        routeId: selectedRoute ? (selectedRoute.Id ?? selectedRoute.id) : null,
+        route: selectedRoute,
         aiSelectedRouteIds: {},
       });
-      get().setLayerData('routes', routes, true);
-      get().setLayerData('tickets', [], true);
-      get().setLayerData('shapes', [], true);
+
+      get().setLayerData('routes', routes, false);
+      if (selectRouteId && selectedRoute) {
+        get().selectRoute(selectRouteId);
+      } else if (routes.length > 0 && !skipDefaultRoute) {
+        const hidden = {};
+        routes.forEach((r, i) => { if (i > 0) hidden[r.Id ?? r.id] = true; });
+        set({ hiddenRouteIds: hidden });
+      } else if (skipDefaultRoute) {
+        set({ hiddenRouteIds: {} });
+      }
+
+      if (!skipTicketReset) {
+        get().setLayerData('tickets', [], true);
+        get().clearTicketsIsolation?.();
+      }
+      if (!skipTicketReset) {
+        get().setLayerData('shapes', [], true);
+      }
 
       if (!get().sfInstanceUrl) {
         routingApi.getSfInstanceUrl().then((url) => set({ sfInstanceUrl: url })).catch(() => {});
       }
+
+      return { routes, selectedRoute };
     } catch (err) {
       toast.error(getErrorMessage(err));
+      return { routes: [], selectedRoute: null };
     } finally {
       set({ isLoading: false });
     }
@@ -152,6 +185,50 @@ const routingSlice = (set, get) => ({
   setServiceDate: (serviceDate) => set({ serviceDate }),
   setRecordType: (recordType) => set({ recordType }),
   setServiceLocation: (serviceLocation) => set({ serviceLocation }),
+
+  /** One-click navigation from a bell notification: switch filters, open route, show single ticket. */
+  navigateFromNotification: async (n) => {
+    if (!n) return;
+
+    if (!n.readAt) await get().markRead(n.id);
+
+    const targetRecordType = n.routeRecordType || n.caseRecordType || get().recordType;
+    const targetDate = normalizeServiceDate(n.routeServiceDate || n.suggestedDate) || get().serviceDate;
+    const filtersChanged =
+      targetRecordType !== get().recordType ||
+      targetDate !== get().serviceDate;
+
+    set({ skipNextAutoLoad: true });
+
+    if (filtersChanged) {
+      set({ recordType: targetRecordType, serviceDate: targetDate });
+      const { selectedRoute } = await get().loadRoutingData({
+        selectRouteId: n.googleRouteId || null,
+        skipTicketReset: true,
+        skipDefaultRoute: !n.googleRouteId,
+      });
+      if (n.googleRouteId && !selectedRoute) {
+        toast.error('Route not found for the selected date and record type.');
+      }
+    } else if (n.googleRouteId) {
+      get().selectRoute(n.googleRouteId);
+      const found = get().routes.find((r) => (r.Id ?? r.id) === n.googleRouteId);
+      if (!found) {
+        toast.error('Route not found for the selected date and record type.');
+      }
+    }
+
+    set({ skipNextAutoLoad: false });
+
+    const { layers } = get();
+    if (!layers.routes.visible) get().toggleLayer('routes');
+
+    if (ticketHasCoords(n)) {
+      get().showNotificationTicketOnMap(n);
+    } else if (n.accountId) {
+      toast.info('This ticket has no map coordinates.');
+    }
+  },
 
   /**
    * Apply a SF→AWS webhook patch to the in-memory route store. Driven by the

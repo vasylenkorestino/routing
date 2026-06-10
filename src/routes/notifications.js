@@ -67,7 +67,8 @@ router.get('/', async (req, res, next) => {
       SELECT Id, Name, CreatedDate, Read_Date__c, Status__c, Type__c, Skill__c,
              Confidence__c, Reason__c, Input_Data__c,
              Account__c, Account__r.Name, Account__r.MALatitude__c, Account__r.MALongitude__c,
-             Google_Route__c, Google_Route__r.Name,
+             Google_Route__c, Google_Route__r.Name, Google_Route__r.Service_Date__c,
+             Google_Route__r.RecordType.Name,
              Ticket__c, Ticket__r.CaseNumber, Ticket__r.Subject, Ticket__r.Type,
              Ticket__r.CreatedDate, Ticket__r.RecordType.Name,
              Accepted_By__c, Accepted_Date__c
@@ -159,7 +160,7 @@ router.post('/:id/decline', async (req, res, next) => {
       Read_Date__c: now,
     });
 
-    const ticket = parseStoredTicket(log.Input_Data__c);
+    const { ticket } = parseStoredInput(log.Input_Data__c);
     if (ticket && ticket.id) {
       const exclude = log.Google_Route__c ? [log.Google_Route__c] : [];
       setImmediate(() => {
@@ -208,13 +209,27 @@ router.post('/read-all', async (req, res, next) => {
   }
 });
 
+function parseStoredInput(inputData) {
+  if (!inputData) return { ticket: null, decision: null };
+  try {
+    const parsed = JSON.parse(inputData);
+    return { ticket: parsed?.ticket || null, decision: parsed?.decision || null };
+  } catch (err) {
+    logger.warn('[notifications] could not parse Input_Data__c', { error: err.message });
+    return { ticket: null, decision: null };
+  }
+}
+
 function toNotification(r) {
-  const stored = parseStoredTicket(r.Input_Data__c);
+  const { ticket: stored, decision: storedDecision } = parseStoredInput(r.Input_Data__c);
   const ticketType = r.Ticket__r?.Type || stored?.typeName || stored?.ticket?.typeName || null;
   const caseRecordType = r.Ticket__r?.RecordType?.Name || stored?.recordType || stored?.ticket?.recordType || null;
   const ticketOpenedAt = r.Ticket__r?.CreatedDate || stored?.createdDate || stored?.ticket?.createdDate || null;
   const accountLat = r.Account__r?.MALatitude__c ?? stored?.accountLat ?? stored?.ticket?.accountLat ?? null;
   const accountLng = r.Account__r?.MALongitude__c ?? stored?.accountLng ?? stored?.ticket?.accountLng ?? null;
+  const routeServiceDate = r.Google_Route__r?.Service_Date__c || null;
+  const routeRecordType = r.Google_Route__r?.RecordType?.Name || null;
+  const suggestedDate = storedDecision?.suggestedDate || null;
 
   return {
     id: r.Id,
@@ -232,6 +247,9 @@ function toNotification(r) {
     accountLng,
     googleRouteId: r.Google_Route__c,
     googleRouteName: r.Google_Route__r?.Name || null,
+    routeServiceDate,
+    routeRecordType,
+    suggestedDate,
     ticketId: r.Ticket__c,
     caseNumber: r.Ticket__r?.CaseNumber || null,
     ticketSubject: r.Ticket__r?.Subject || null,
@@ -260,18 +278,6 @@ async function loadTriageLog(conn, id) {
   `;
   const result = await conn.query(soql);
   return result.records?.[0] || null;
-}
-
-/** Pulls the ticket payload that triageTicket originally received out of Input_Data__c. */
-function parseStoredTicket(inputData) {
-  if (!inputData) return null;
-  try {
-    const parsed = JSON.parse(inputData);
-    return parsed?.ticket || null;
-  } catch (err) {
-    logger.warn('[notifications] could not parse Input_Data__c', { error: err.message });
-    return null;
-  }
 }
 
 module.exports = router;
