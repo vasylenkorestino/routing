@@ -8,6 +8,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const sf = require('../services/salesforce');
 const anthropicConfig = require('../config/anthropic');
 const logger = require('../utils/logger');
+const { redactFreeText } = require('../utils/aiDataPolicy');
 
 const SELECTION_PROMPT = `You are an AI route analyst for a UCO (Used Cooking Oil) collection company.
 You analyze route stops AND discover new accounts to add.
@@ -175,9 +176,10 @@ class AccountSelector {
              Route_Notes__c, Notes__c,
              Ignore_For_Routing__c, Rotisserie_Collection__c,
              (SELECT Id, Qty_Gallons__c, Service_Date__c FROM Services__r ORDER BY CreatedDate DESC LIMIT 3),
-             (SELECT Id, Type, Description FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' LIMIT 3)
+             (SELECT Id, Type, Status FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' LIMIT 3)
       FROM Account
       WHERE Ignore_For_Routing__c = false
+        AND Account_Status__c = 'Active'
         AND MALatitude__c != null AND MALongitude__c != null
         AND (Expected_Date_Of_Service__c <= ${serviceDate} OR Expected_Date_Of_Service__c = null)
         ${bbox}${rtFilter}
@@ -205,9 +207,9 @@ class AccountSelector {
         lastServiceDate: s.lastServiceDate,
         interval: s.interval,
         priorityTier: s.priorityTier,
-        routeNotes: s.routeNotes,
-        specialInstructions: s.specialInstructions,
-        driverNotes: s.driverNotes,
+        routeNotes: redactFreeText(s.routeNotes),
+        specialInstructions: redactFreeText(s.specialInstructions),
+        driverNotes: redactFreeText(s.driverNotes),
         recentServices: s.recentServices,
       })),
       candidates: candidates.map((a) => ({
@@ -220,8 +222,8 @@ class AccountSelector {
         interval: a.DaysInterval__c,
         tankSize: a.Tank_Size__c,
         priorityTier: a.Priority_Tier__c,
-        routeNotes: a.Route_Notes__c,
-        specialInstructions: a.Notes__c,
+        routeNotes: redactFreeText(a.Route_Notes__c),
+        specialInstructions: redactFreeText(a.Notes__c),
         hasOpenTicket: (a.Cases?.records?.length || 0) > 0,
         recentServices: (a.Services__r?.records || []).map((sv) => ({ gallons: sv.Qty_Gallons__c, date: sv.Service_Date__c })),
       })),

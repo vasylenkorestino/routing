@@ -107,7 +107,12 @@ CORE DECISION LOGIC (per account):
 3. Will it overflow before the next area visit?
 4. Is it close enough to include on today's route?
 5. Does it have a fixed contract, VIP status, or sensor data?
-Then: select qualifying accounts → group geographically → build routes within truck/driver limits → maximize stops-per-mile.`;
+Then: select qualifying accounts → group geographically → build routes within truck/driver limits → maximize stops-per-mile.
+
+DATA PRIVACY (mandatory):
+- Never request or use Lead.Email, Lead.Phone, Contact.Email, Contact.Phone, Account email/phone fields, or any customer contact identifiers.
+- Case.Description is not available; use ticket Type/Status only.
+- If a user asks for customer contact details, refuse and explain that routing AI does not access PII.`;
 
 /** Creates an orchestrator that runs a multi-turn tool-use loop with Claude.
  *  Optional `recorder` (from stepRecorder) captures each Claude turn and tool call as a step. */

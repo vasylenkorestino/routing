@@ -155,6 +155,7 @@ router.post('/', async (req, res, next) => {
             AND MALongitude__c >= ${minLng} AND MALongitude__c <= ${maxLng}
             AND Id NOT IN (${excludeIds})
             AND Ignore_For_Routing__c = false
+            AND Account_Status__c = 'Active'
             AND MALatitude__c != null AND MALongitude__c != null
           LIMIT 50
         `;

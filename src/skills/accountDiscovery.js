@@ -1,5 +1,6 @@
 const BaseSkill = require('./base');
 const sf = require('../services/salesforce');
+const { redactFreeText } = require('../utils/aiDataPolicy');
 
 /** Finds accounts eligible for routing based on service schedules, tickets, and location. */
 class AccountDiscoverySkill extends BaseSkill {
@@ -9,7 +10,8 @@ class AccountDiscoverySkill extends BaseSkill {
       description:
         'Find accounts that need to be serviced. Filters by: service schedule ' +
         '(Expected_Date_Of_Service__c <= target date), open UCO Collection tickets, ' +
-        'valid coordinates, not ignored for routing, and not already on an active route for the target date. ' +
+        'valid coordinates, active status (Account_Status__c = Active), not ignored for routing, ' +
+        'and not already on an active route for the target date. ' +
         'Returns accounts with location, service history, and open tickets.',
       inputSchema: {
         type: 'object',
@@ -46,9 +48,10 @@ class AccountDiscoverySkill extends BaseSkill {
       'Last_Service_Date__c, Expected_Date_Of_Service__c, Pickup_Frequency_in_Days__c, ' +
       'Interval__c, Ignore_For_Routing__c, UCO_Collection__c, Rotisserie_Collection__c, Route_Notes__c, Notes__c, ' +
       '(SELECT Id, Qty_Gallons__c FROM Services__r WHERE RecordType.Name = \'UCO Collection\' ORDER BY CreatedDate DESC LIMIT 3), ' +
-      '(SELECT Id, Subject, Type, Description, Status FROM Cases WHERE Status = \'Open\' AND Type = \'UCO Collection\' ORDER BY CreatedDate DESC) ' +
+      '(SELECT Id, Subject, Type, Status FROM Cases WHERE Status = \'Open\' AND Type = \'UCO Collection\' ORDER BY CreatedDate DESC) ' +
       'FROM Account ' +
       'WHERE Ignore_For_Routing__c = false ' +
+      'AND Account_Status__c = \'Active\' ' +
       'AND MALatitude__c != null AND MALongitude__c != null ';
 
     if (recordTypeName) {
@@ -90,8 +93,8 @@ class AccountDiscoverySkill extends BaseSkill {
         hasOpenTicket: (a.Cases?.records?.length || 0) > 0,
         ticketCount: a.Cases?.records?.length || 0,
         lastGallons: a.Services__r?.records?.[0]?.Qty_Gallons__c || null,
-        Route_Notes__c: a.Route_Notes__c,
-        Notes__c: a.Notes__c,
+        Route_Notes__c: redactFreeText(a.Route_Notes__c),
+        Notes__c: redactFreeText(a.Notes__c),
       })),
     };
   }

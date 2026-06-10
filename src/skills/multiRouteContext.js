@@ -1,5 +1,6 @@
 const BaseSkill = require('./base');
 const sf = require('../services/salesforce');
+const { redactFreeText, sanitizeCaseForAI } = require('../utils/aiDataPolicy');
 
 /** Loads multiple Google_Route__c routes with their stops, account/service detail, and open UCO tickets. */
 class MultiRouteContextSkill extends BaseSkill {
@@ -78,7 +79,7 @@ class MultiRouteContextSkill extends BaseSkill {
         `Ignore_For_Routing__c, Rotisserie_Collection__c, Shape_Name__c, ` +
         `(SELECT Id, Qty_Gallons__c, Service_Date__c FROM Services__r ` +
         `WHERE RecordType.Name = 'UCO Collection' ORDER BY CreatedDate DESC LIMIT 5), ` +
-        `(SELECT Id, Subject, Type, Description, Status, CreatedDate FROM Cases ` +
+        `(SELECT Id, Subject, Type, Status, CreatedDate FROM Cases ` +
         `WHERE Status = 'Open' AND Type = 'UCO Collection' ORDER BY CreatedDate DESC LIMIT 5) ` +
         `FROM Account WHERE Id IN (${acctIdList})`
       );
@@ -114,11 +115,11 @@ class MultiRouteContextSkill extends BaseSkill {
         lastServiceDate: acct.Last_Service_Date__c,
         expectedServiceDate: acct.Expected_Date_Of_Service__c,
         priorityTier: acct.Priority_Tier__c,
-        routeNotes: acct.Route_Notes__c,
-        specialInstructions: acct.Notes__c,
+        routeNotes: redactFreeText(acct.Route_Notes__c),
+        specialInstructions: redactFreeText(acct.Notes__c),
         rotisserie: acct.Rotisserie_Collection__c,
         recentServices: services.map((sv) => ({ gallons: sv.Qty_Gallons__c, date: sv.Service_Date__c })),
-        openTickets: cases.map((c) => ({ id: c.Id, subject: c.Subject, type: c.Type, description: c.Description })),
+        openTickets: cases.map((c) => sanitizeCaseForAI(c)),
       });
     }
 
@@ -129,10 +130,7 @@ class MultiRouteContextSkill extends BaseSkill {
         openTickets.push({
           accountId: a.Id,
           accountName: a.Name,
-          caseId: c.Id,
-          subject: c.Subject,
-          type: c.Type,
-          description: c.Description,
+          ...sanitizeCaseForAI(c),
           createdDate: c.CreatedDate,
         });
       }
@@ -179,6 +177,7 @@ class MultiRouteContextSkill extends BaseSkill {
             `AND MALongitude__c >= ${minLng} AND MALongitude__c <= ${maxLng} ` +
             `AND Id NOT IN (${excludeIds}) ` +
             `AND Ignore_For_Routing__c = false ` +
+            `AND Account_Status__c = 'Active' ` +
             `AND MALatitude__c != null AND MALongitude__c != null ` +
             `LIMIT ${Math.min(maxAccounts, 1000)}`
           );
@@ -196,8 +195,8 @@ class MultiRouteContextSkill extends BaseSkill {
             tankSize: a.Tank_Size__c,
             secondContainer: a.Second_Container__c,
             priorityTier: a.Priority_Tier__c,
-            routeNotes: a.Route_Notes__c,
-            specialInstructions: a.Notes__c,
+            routeNotes: redactFreeText(a.Route_Notes__c),
+            specialInstructions: redactFreeText(a.Notes__c),
             rotisserie: a.Rotisserie_Collection__c,
             hasOpenTicket: (a.Cases?.records?.length || 0) > 0,
             openTicketCount: a.Cases?.records?.length || 0,

@@ -153,7 +153,7 @@ class RouteGenerationSkill extends BaseSkill {
       `SELECT Id, Name, ShippingStreet, ShippingCity, ShippingState, ShippingCountry, ` +
       `MALatitude__c, MALongitude__c, Rotisserie_Collection__c, ` +
       `(SELECT Id, Qty_Gallons__c FROM Services__r WHERE RecordType.Name = 'UCO Collection' ORDER BY CreatedDate DESC LIMIT 1), ` +
-      `(SELECT Id, Type, Description FROM Cases WHERE Status = 'Open' ORDER BY CreatedDate DESC LIMIT 3) ` +
+      `(SELECT Id, Type, Status FROM Cases WHERE Status = 'Open' ORDER BY CreatedDate DESC LIMIT 3) ` +
       `FROM Account WHERE Id IN (${idList})`
     );
 

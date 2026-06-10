@@ -63,9 +63,10 @@ class RouteEnhancementSkill extends BaseSkill {
       `SELECT Id, Name, ShippingStreet, ShippingCity, ShippingState, ` +
       `MALatitude__c, MALongitude__c, Last_Service_Date__c, Expected_Date_Of_Service__c, ` +
       `Pickup_Frequency_in_Days__c, Route_Notes__c, Notes__c, Shape_Name__c, ` +
-      `(SELECT Id, Type, Description FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' LIMIT 3) ` +
+      `(SELECT Id, Type, Status FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' LIMIT 3) ` +
       `FROM Account ` +
-      `WHERE Ignore_For_Routing__c = false AND MALatitude__c != null AND MALongitude__c != null ` +
+      `WHERE Ignore_For_Routing__c = false AND Account_Status__c = 'Active' ` +
+      `AND MALatitude__c != null AND MALongitude__c != null ` +
       `AND (Expected_Date_Of_Service__c <= ${serviceDate} OR Expected_Date_Of_Service__c = null) ` +
       `ORDER BY Expected_Date_Of_Service__c ASC NULLS LAST LIMIT 1000`
     );
