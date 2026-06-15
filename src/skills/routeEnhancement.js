@@ -1,5 +1,6 @@
 const BaseSkill = require('./base');
 const sf = require('../services/salesforce');
+const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 
 /** Loads an existing route and finds candidate accounts to add based on proximity and service schedule. */
 class RouteEnhancementSkill extends BaseSkill {
@@ -65,7 +66,7 @@ class RouteEnhancementSkill extends BaseSkill {
       `Pickup_Frequency_in_Days__c, Route_Notes__c, Notes__c, Shape_Name__c, ` +
       `(SELECT Id, Type, Status FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' LIMIT 3) ` +
       `FROM Account ` +
-      `WHERE Ignore_For_Routing__c = false AND Account_Status__c = 'Active' ` +
+      `WHERE ${accountRoutingFilterClause()} ` +
       `AND MALatitude__c != null AND MALongitude__c != null ` +
       `AND (Expected_Date_Of_Service__c <= ${serviceDate} OR Expected_Date_Of_Service__c = null) ` +
       `ORDER BY Expected_Date_Of_Service__c ASC NULLS LAST LIMIT 1000`

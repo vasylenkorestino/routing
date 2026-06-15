@@ -1,6 +1,7 @@
 const BaseSkill = require('./base');
 const sf = require('../services/salesforce');
 const { redactFreeText, sanitizeCaseForAI } = require('../utils/aiDataPolicy');
+const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 
 /** Loads multiple Google_Route__c routes with their stops, account/service detail, and open UCO tickets. */
 class MultiRouteContextSkill extends BaseSkill {
@@ -176,8 +177,7 @@ class MultiRouteContextSkill extends BaseSkill {
             `WHERE MALatitude__c >= ${minLat} AND MALatitude__c <= ${maxLat} ` +
             `AND MALongitude__c >= ${minLng} AND MALongitude__c <= ${maxLng} ` +
             `AND Id NOT IN (${excludeIds}) ` +
-            `AND Ignore_For_Routing__c = false ` +
-            `AND Account_Status__c = 'Active' ` +
+            `AND ${accountRoutingFilterClause()} ` +
             `AND MALatitude__c != null AND MALongitude__c != null ` +
             `LIMIT ${Math.min(maxAccounts, 1000)}`
           );

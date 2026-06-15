@@ -5,6 +5,7 @@ const { getConnection } = require('../services/salesforce');
 const { logErrorToSalesforce } = require('../services/errorLogger');
 const { logAction } = require('../services/actionLogger');
 const { createRecorder } = require('../services/stepRecorder');
+const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 const logger = require('../utils/logger');
 
 const ANALYZE_SYSTEM = `You are an AI route analyst for a UCO (Used Cooking Oil) collection company. You analyze route stops AND discover new accounts to add.
@@ -154,8 +155,7 @@ router.post('/', async (req, res, next) => {
           WHERE MALatitude__c >= ${minLat} AND MALatitude__c <= ${maxLat}
             AND MALongitude__c >= ${minLng} AND MALongitude__c <= ${maxLng}
             AND Id NOT IN (${excludeIds})
-            AND Ignore_For_Routing__c = false
-            AND Account_Status__c = 'Active'
+            AND ${accountRoutingFilterClause()}
             AND MALatitude__c != null AND MALongitude__c != null
           LIMIT 50
         `;

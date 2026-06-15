@@ -1,6 +1,7 @@
 const BaseSkill = require('./base');
 const sf = require('../services/salesforce');
 const { redactFreeText } = require('../utils/aiDataPolicy');
+const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 
 /** Finds accounts eligible for routing based on service schedules, tickets, and location. */
 class AccountDiscoverySkill extends BaseSkill {
@@ -10,7 +11,8 @@ class AccountDiscoverySkill extends BaseSkill {
       description:
         'Find accounts that need to be serviced. Filters by: service schedule ' +
         '(Expected_Date_Of_Service__c <= target date), open UCO Collection tickets, ' +
-        'valid coordinates, active status (Account_Status__c = Active), not ignored for routing, ' +
+        'valid coordinates, active status (Account_Status__c = Active), UCO collection enabled ' +
+        '(UCO_Collection__c = true), not ignored for routing, ' +
         'and not already on an active route for the target date. ' +
         'Returns accounts with location, service history, and open tickets.',
       inputSchema: {
@@ -50,8 +52,7 @@ class AccountDiscoverySkill extends BaseSkill {
       '(SELECT Id, Qty_Gallons__c FROM Services__r WHERE RecordType.Name = \'UCO Collection\' ORDER BY CreatedDate DESC LIMIT 3), ' +
       '(SELECT Id, Subject, Type, Status FROM Cases WHERE Status = \'Open\' AND Type = \'UCO Collection\' ORDER BY CreatedDate DESC) ' +
       'FROM Account ' +
-      'WHERE Ignore_For_Routing__c = false ' +
-      'AND Account_Status__c = \'Active\' ' +
+      `WHERE ${accountRoutingFilterClause()} ` +
       'AND MALatitude__c != null AND MALongitude__c != null ';
 
     if (recordTypeName) {

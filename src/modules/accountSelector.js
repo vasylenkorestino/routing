@@ -9,6 +9,7 @@ const sf = require('../services/salesforce');
 const anthropicConfig = require('../config/anthropic');
 const logger = require('../utils/logger');
 const { redactFreeText } = require('../utils/aiDataPolicy');
+const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 
 const SELECTION_PROMPT = `You are an AI route analyst for a UCO (Used Cooking Oil) collection company.
 You analyze route stops AND discover new accounts to add.
@@ -178,8 +179,7 @@ class AccountSelector {
              (SELECT Id, Qty_Gallons__c, Service_Date__c FROM Services__r ORDER BY CreatedDate DESC LIMIT 3),
              (SELECT Id, Type, Status FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' LIMIT 3)
       FROM Account
-      WHERE Ignore_For_Routing__c = false
-        AND Account_Status__c = 'Active'
+      WHERE ${accountRoutingFilterClause()}
         AND MALatitude__c != null AND MALongitude__c != null
         AND (Expected_Date_Of_Service__c <= ${serviceDate} OR Expected_Date_Of_Service__c = null)
         ${bbox}${rtFilter}
