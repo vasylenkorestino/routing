@@ -58,3 +58,8 @@ export const getRouteLogs = (googleRouteId) => client.get(`/routing/route-logs/$
 export const getRouteLogComments = (routeLogId) => client.get(`/routing/route-log-comments/${routeLogId}`).then((r) => r.data);
 export const addRouteLogComment = (routeLogId, body) => client.post('/routing/route-log-comments', { routeLogId, body }).then((r) => r.data);
 export const generateRoutes = (body) => client.post('/generate-routes', body).then((r) => r.data);
+
+/* ── AI Generate by Service Location ─────────────────────── */
+export const generateRoutesByLocation = (body) => client.post('/generate-routes/by-location', body).then((r) => r.data);
+export const getGenerationJob = (id) => client.get(`/generate-routes/jobs/${id}`).then((r) => r.data);
+export const commitGeneratedRoutes = (id, body) => client.post(`/generate-routes/jobs/${id}/commit`, body).then((r) => r.data);

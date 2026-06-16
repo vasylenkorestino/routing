@@ -153,6 +153,16 @@ const bellSlice = (set, get) => ({
         }
       });
 
+      es.addEventListener('generation-progress', (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          const handler = get().onGenerationProgress;
+          if (typeof handler === 'function') handler(payload);
+        } catch (err) {
+          console.warn('[bellSlice] failed to parse generation-progress message', err.message);
+        }
+      });
+
       es.addEventListener('ticket-triaged', (e) => {
         try {
           const payload = JSON.parse(e.data);

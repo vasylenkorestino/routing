@@ -19,6 +19,8 @@ import AIChat from '../components/shared/AIChat';
 import AIReviewPanel from '../components/shared/AIReviewPanel';
 import AIGenerateModal from '../components/shared/AIGenerateModal';
 import AIEnhanceModal from '../components/routes/AIEnhanceModal';
+import GenerationProgressPanel from '../components/shared/GenerationProgressPanel';
+import GeneratedRoutesReview from '../components/shared/GeneratedRoutesReview';
 import Spinner from '../components/ui/Spinner';
 import useNotificationStream from '../hooks/useNotificationStream';
 
@@ -175,6 +177,7 @@ export default function RoutingPage() {
   const isReviewOpen = useStore((s) => s.isReviewOpen);
   const isAIGenerate = useStore((s) => s.isAIGenerate);
   const isAIEnhance = useStore((s) => s.isAIEnhance);
+  const genReviewOpen = useStore((s) => s.genReviewOpen);
 
   useEffect(() => {
     if (skipNextAutoLoad) return;
@@ -186,6 +189,8 @@ export default function RoutingPage() {
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-bg">
       <Header />
+
+      <GenerationProgressPanel />
 
       <div className="flex-1 overflow-hidden">
         <SplitPanel
@@ -206,6 +211,7 @@ export default function RoutingPage() {
       {isReviewOpen && <AIReviewPanel />}
       {isAIGenerate && <AIGenerateModal onClose={() => useStore.getState().closeModal('isAIGenerate')} />}
       {isAIEnhance && <AIEnhanceModal />}
+      {genReviewOpen && <GeneratedRoutesReview />}
     </div>
   );
 }

@@ -27,6 +27,9 @@ export default function Header() {
   const setPanelMode = useStore((st) => st.setPanelMode);
   const openModal = useStore((st) => st.openModal);
   const driver = useStore((st) => st.driver);
+  const genStatus = useStore((st) => st.genStatus);
+  const genPanelOpen = useStore((st) => st.genPanelOpen);
+  const toggleGenPanel = useStore((st) => st.toggleGenPanel);
   const [logsOpen, setLogsOpen] = useState(false);
   const toggleLogs = useCallback(() => { setLogsOpen((p) => !p); setActionLogsOpen(false); }, []);
   const closeLogs = useCallback(() => setLogsOpen(false), []);
@@ -105,6 +108,18 @@ export default function Header() {
         >
           <span className="text-xs">✦</span> AI Generate
         </button>
+        {genStatus !== 'idle' && (
+          <button
+            className={`h-8 px-2.5 rounded-lg border text-[13px] font-medium transition flex items-center gap-1.5 ${genPanelOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
+            title="AI Generation progress"
+            onClick={toggleGenPanel}
+          >
+            {genStatus === 'running'
+              ? <span className="w-3.5 h-3.5 border-2 border-ai border-t-transparent rounded-full animate-spin inline-block" />
+              : <span className={`w-2 h-2 rounded-full ${genStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`} />}
+            Progress
+          </button>
+        )}
       </div>
 
       <div className="flex-1" />

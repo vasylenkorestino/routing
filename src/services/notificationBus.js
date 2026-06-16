@@ -9,6 +9,7 @@ bus.setMaxListeners(0);
 
 const EVENT_TICKET_TRIAGED = 'ticket-triaged';
 const EVENT_SF_CHANGED = 'sf-changed';
+const EVENT_GENERATION_PROGRESS = 'generation-progress';
 
 /** Publishes a notification payload to all SSE subscribers. */
 function publish(event, payload) {
@@ -21,4 +22,4 @@ function subscribe(listener) {
   return () => bus.off('notification', listener);
 }
 
-module.exports = { publish, subscribe, EVENT_TICKET_TRIAGED, EVENT_SF_CHANGED };
+module.exports = { publish, subscribe, EVENT_TICKET_TRIAGED, EVENT_SF_CHANGED, EVENT_GENERATION_PROGRESS };
