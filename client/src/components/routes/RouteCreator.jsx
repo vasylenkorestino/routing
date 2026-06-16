@@ -92,32 +92,47 @@ export default function RouteCreator() {
     return 0;
   });
 
-  const handleCreate = async () => {
-    setLoading(true);
-    try {
-      if (tab === 'inherit') {
-        const routeIds = selected.filter((id) => templates.find((t) => t.Id === id && t._type === 'route'));
-        const shapeIds = selected.filter((id) => templates.find((t) => t.Id === id && t._type === 'shape'));
+  // Inherit: close the modal immediately and finish creation + refresh in the
+  // background so the user can keep working; routes appear once they're ready.
+  const handleInheritInBackground = () => {
+    const routeIds = selected.filter((id) => templates.find((t) => t.Id === id && t._type === 'route'));
+    const shapeIds = selected.filter((id) => templates.find((t) => t.Id === id && t._type === 'shape'));
+    const selDate = date;
 
+    closeModal('isNew');
+    toast.success('Route creation started in the background…');
+
+    (async () => {
+      try {
         const promises = [];
         if (routeIds.length > 0) {
-          promises.push(routingApi.createRoutes({ selectedRowIds: routeIds, selectedDate: date }));
+          promises.push(routingApi.createRoutes({ selectedRowIds: routeIds, selectedDate: selDate }));
         }
         if (shapeIds.length > 0) {
-          promises.push(routingApi.generateRouteByShape({ shapeIds, serviceDate: date }));
+          promises.push(routingApi.generateRouteByShape({ shapeIds, serviceDate: selDate }));
         }
         await Promise.all(promises);
 
-        if (shapeIds.length > 0) {
-          toast.success('Route creation started. Waiting for it to finish...');
-          await pollForNewRoutes(refreshRoutes, 12, 3000);
-        } else {
-          await refreshRoutes();
-        }
-      } else {
-        await routingApi.createRoutes({ name: routeName, selectedDate: date, recordTypeName: recType, serviceLocationId: svcLoc });
-        await refreshRoutes();
+        // Shapes generate asynchronously on Salesforce, so poll until they land.
+        if (shapeIds.length > 0) await pollForNewRoutes(refreshRoutes, 12, 3000);
+        else await refreshRoutes();
+
+        toast.success('Route created.');
+      } catch (err) {
+        toast.error(getErrorMessage(err));
       }
+    })();
+  };
+
+  const handleCreate = async () => {
+    if (tab === 'inherit') {
+      handleInheritInBackground();
+      return;
+    }
+    setLoading(true);
+    try {
+      await routingApi.createRoutes({ name: routeName, selectedDate: date, recordTypeName: recType, serviceLocationId: svcLoc });
+      await refreshRoutes();
       toast.success('Done! Route created.');
       closeModal('isNew');
     } catch (err) { toast.error(getErrorMessage(err)); }

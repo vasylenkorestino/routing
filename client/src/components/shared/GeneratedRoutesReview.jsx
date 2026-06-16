@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import useStore from '../../store';
 import RoutePreviewMap from './RoutePreviewMap';
+import RoutesOverviewMap, { routeColor } from './RoutesOverviewMap';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 
@@ -47,14 +48,19 @@ export default function GeneratedRoutesReview() {
 
   const [selectedId, setSelectedId] = useState(routes[0]?.id ?? null);
   const [checked, setChecked] = useState(() => new Set(routes.map((r) => r.id)));
+  const [mapView, setMapView] = useState('overview'); // 'overview' | 'single'
 
   const selectedRoute = useMemo(() => routes.find((r) => r.id === selectedId) || routes[0] || null, [routes, selectedId]);
+  const checkedRoutes = useMemo(() => routes.filter((r) => checked.has(r.id)), [routes, checked]);
+  const allChecked = routes.length > 0 && checked.size === routes.length;
 
   const toggleCheck = (id) => setChecked((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+
+  const toggleAll = () => setChecked(allChecked ? new Set() : new Set(routes.map((r) => r.id)));
 
   const doCommit = async (ids) => {
     try {
@@ -189,31 +195,62 @@ export default function GeneratedRoutesReview() {
       ) : (
         <div className="flex-1 flex min-h-0">
           {/* Route list */}
-          <div className="w-[420px] shrink-0 border-r border-border overflow-auto">
-            {routes.map((r) => (
-              <RouteListItem
-                key={r.id}
-                route={r}
-                active={r.id === selectedRoute?.id}
-                checked={checked.has(r.id)}
-                onToggle={() => toggleCheck(r.id)}
-                onSelect={() => setSelectedId(r.id)}
+          <div className="w-[420px] shrink-0 border-r border-border flex flex-col min-h-0">
+            <label className="flex items-center gap-2.5 px-3 py-2 border-b border-border bg-bg/40 shrink-0 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allChecked}
+                ref={(el) => { if (el) el.indeterminate = checked.size > 0 && !allChecked; }}
+                onChange={toggleAll}
               />
-            ))}
+              <span className="text-[12px] font-medium text-txt">{allChecked ? 'Deselect all' : 'Select all'}</span>
+              <span className="text-[11px] text-txt-secondary">· {checked.size}/{routes.length} selected</span>
+            </label>
+            <div className="flex-1 overflow-auto">
+              {routes.map((r, i) => (
+                <RouteListItem
+                  key={r.id}
+                  route={r}
+                  color={mapView === 'overview' && checked.has(r.id) ? routeColor(checkedRoutes.findIndex((c) => c.id === r.id)) : null}
+                  active={r.id === selectedRoute?.id}
+                  checked={checked.has(r.id)}
+                  onToggle={() => toggleCheck(r.id)}
+                  onSelect={() => setSelectedId(r.id)}
+                />
+              ))}
+            </div>
           </div>
 
           {/* Detail + map */}
           <div className="flex-1 flex flex-col min-h-0">
-            {selectedRoute && (
-              <>
-                <div className="h-[45%] min-h-[220px] border-b border-border">
-                  <RoutePreviewMap route={selectedRoute} />
-                </div>
-                <div className="flex-1 overflow-auto p-4">
-                  <RouteDetail route={selectedRoute} />
-                </div>
-              </>
-            )}
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+              <div className="inline-flex rounded-lg border border-border overflow-hidden">
+                <button
+                  className={`h-7 px-3 text-[12px] font-medium transition border-none ${mapView === 'overview' ? 'bg-ai text-white' : 'bg-surface text-txt-secondary hover:bg-bg'}`}
+                  onClick={() => setMapView('overview')}
+                >
+                  All selected ({checked.size})
+                </button>
+                <button
+                  className={`h-7 px-3 text-[12px] font-medium transition border-none ${mapView === 'single' ? 'bg-ai text-white' : 'bg-surface text-txt-secondary hover:bg-bg'}`}
+                  onClick={() => setMapView('single')}
+                >
+                  Single route
+                </button>
+              </div>
+              <span className="text-[11px] text-txt-secondary truncate">
+                {mapView === 'overview' ? 'All selected routes on the map' : selectedRoute?.routeName}
+              </span>
+            </div>
+
+            <div className="h-[45%] min-h-[220px] border-b border-border">
+              {mapView === 'overview'
+                ? <RoutesOverviewMap routes={checkedRoutes} />
+                : selectedRoute && <RoutePreviewMap route={selectedRoute} />}
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {selectedRoute && <RouteDetail route={selectedRoute} />}
+            </div>
           </div>
         </div>
       )}
@@ -221,13 +258,14 @@ export default function GeneratedRoutesReview() {
   );
 }
 
-function RouteListItem({ route, active, checked, onToggle, onSelect }) {
+function RouteListItem({ route, active, checked, color, onToggle, onSelect }) {
   return (
     <div className={`border-b border-border/60 transition ${active ? 'bg-bg/70' : 'hover:bg-bg/40'}`}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
         <input type="checkbox" className="mt-1" checked={checked} onChange={onToggle} onClick={(e) => e.stopPropagation()} />
         <button className="flex-1 text-left" onClick={onSelect}>
           <div className="flex items-center gap-2">
+            {color && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />}
             <span className="text-[13px] font-medium text-txt truncate">{route.routeName}</span>
             {route.optimizationScore != null && (
               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">{route.optimizationScore}%</span>
