@@ -42,6 +42,8 @@ export default function GeneratedRoutesReview() {
   const close = useStore((s) => s.closeGenReview);
   const commit = useStore((s) => s.commitGeneratedRoutes);
   const regenerate = useStore((s) => s.regenerateRoutes);
+  const combine = useStore((s) => s.combineGeneratedRoutes);
+  const split = useStore((s) => s.splitGeneratedRoute);
 
   const [selectedId, setSelectedId] = useState(routes[0]?.id ?? null);
   const [checked, setChecked] = useState(() => new Set(routes.map((r) => r.id)));
@@ -73,6 +75,24 @@ export default function GeneratedRoutesReview() {
       close();
     } catch (err) {
       toast.error(getErrorMessage(err));
+    }
+  };
+
+  const doCombine = () => {
+    const mergedId = combine([...checked]);
+    if (mergedId) {
+      setChecked(new Set([mergedId]));
+      setSelectedId(mergedId);
+      toast.success('Routes combined');
+    }
+  };
+
+  const doSplit = (id) => {
+    const firstId = split(id);
+    if (firstId) {
+      setChecked((prev) => { const next = new Set(prev); next.delete(id); return next; });
+      setSelectedId(firstId);
+      toast.success('Route split into two');
     }
   };
 
@@ -125,6 +145,22 @@ export default function GeneratedRoutesReview() {
         </button>
         <button
           className="h-8 px-3 rounded-lg border border-border text-txt text-[13px] font-medium hover:bg-bg transition disabled:opacity-50"
+          disabled={committing || checked.size < 2}
+          onClick={doCombine}
+          title="Merge the selected routes into one"
+        >
+          Combine Selected ({checked.size})
+        </button>
+        <button
+          className="h-8 px-3 rounded-lg border border-border text-txt text-[13px] font-medium hover:bg-bg transition disabled:opacity-50"
+          disabled={committing || !selectedRoute || selectedRoute.totalStops < 2}
+          onClick={() => selectedRoute && doSplit(selectedRoute.id)}
+          title="Split the selected route into two"
+        >
+          Split Selected
+        </button>
+        <button
+          className="h-8 px-3 rounded-lg border border-border text-txt text-[13px] font-medium hover:bg-bg transition disabled:opacity-50"
           disabled={committing}
           onClick={doRegenerate}
         >
@@ -170,7 +206,7 @@ export default function GeneratedRoutesReview() {
           <div className="flex-1 flex flex-col min-h-0">
             {selectedRoute && (
               <>
-                <div className="h-[55%] min-h-[260px] border-b border-border">
+                <div className="h-[45%] min-h-[220px] border-b border-border">
                   <RoutePreviewMap route={selectedRoute} />
                 </div>
                 <div className="flex-1 overflow-auto p-4">
@@ -214,23 +250,12 @@ function RouteDetail({ route }) {
     <div className="space-y-4">
       <div>
         <h3 className="text-sm font-semibold text-txt">{route.routeName}</h3>
-        <div className="text-[12px] text-txt-secondary">{route.direction}</div>
+        <div className="text-[12px] text-txt-secondary">
+          {route.direction} · {route.totalStops} stops · {route.totalDistanceMi} mi · {fmtDuration(route.totalDurationMin)}
+        </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <Metric label="Date" value={route.serviceDate} />
-        <Metric label="Record Type" value={route.recordType || '—'} />
-        <Metric label="Region / Direction" value={route.direction} />
-        <Metric label="Total Stops" value={route.totalStops} />
-        <Metric label="Total Distance" value={`${route.totalDistanceMi} mi`} />
-        <Metric label="Est. Drive Time" value={fmtDuration(route.driveTimeMin)} />
-        <Metric label="Est. Service Time" value={fmtDuration(route.serviceTimeMin)} />
-        <Metric label="Total Duration" value={fmtDuration(route.totalDurationMin)} />
-        <Metric label="Est. Gallons" value={route.totalGallons} />
-        <Metric label="Optimization Score" value={route.optimizationScore != null ? `${route.optimizationScore}%` : '—'} />
-        <Metric label="Service Location" value={route.depot?.name || '—'} />
-      </div>
-
+      {/* Stops — account names + addresses, shown first */}
       <div>
         <div className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wide mb-1.5">Stops ({route.stops.length})</div>
         <div className="border border-border/60 rounded-lg overflow-hidden">
@@ -245,19 +270,33 @@ function RouteDetail({ route }) {
             </thead>
             <tbody className="divide-y divide-border/50">
               {route.stops.map((s) => (
-                <tr key={s.accountId} className="hover:bg-bg/30">
+                <tr key={s.accountId} className="hover:bg-bg/30 align-top">
                   <td className="px-3 py-1.5 tabular-nums text-txt-secondary">{s.priority}</td>
-                  <td className="px-3 py-1.5 text-txt">
-                    {s.accountName}
+                  <td className="px-3 py-1.5 text-txt font-medium">
+                    {s.accountName || s.accountId}
                     {s.hasOpenTicket && <span className="ml-1.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700">TICKET</span>}
                   </td>
-                  <td className="px-3 py-1.5 text-txt-secondary truncate max-w-[260px]">{s.address || '—'}</td>
+                  <td className="px-3 py-1.5 text-txt-secondary max-w-[320px]">{s.address || '—'}</td>
                   <td className="px-3 py-1.5 text-right tabular-nums text-txt-secondary">{s.estGallons}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <Metric label="Date" value={route.serviceDate} />
+        <Metric label="Record Type" value={route.recordType || '—'} />
+        <Metric label="Region / Direction" value={route.direction} />
+        <Metric label="Total Stops" value={route.totalStops} />
+        <Metric label="Total Distance" value={`${route.totalDistanceMi} mi`} />
+        <Metric label="Est. Drive Time" value={fmtDuration(route.driveTimeMin)} />
+        <Metric label="Est. Service Time" value={fmtDuration(route.serviceTimeMin)} />
+        <Metric label="Total Duration" value={fmtDuration(route.totalDurationMin)} />
+        <Metric label="Est. Gallons" value={route.totalGallons} />
+        <Metric label="Optimization Score" value={route.optimizationScore != null ? `${route.optimizationScore}%` : 'Manual'} />
+        <Metric label="Service Location" value={route.depot?.name || '—'} />
       </div>
     </div>
   );

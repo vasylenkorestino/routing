@@ -151,9 +151,16 @@ router.post('/jobs/:id/commit', async (req, res, next) => {
       return res.status(409).json({ error: 'Job is not complete', status: job.status });
     }
 
-    const allRoutes = job.result.routes || [];
-    const selectedIds = Array.isArray(req.body?.routeIds) ? new Set(req.body.routeIds) : null;
-    const selected = selectedIds ? allRoutes.filter((r) => selectedIds.has(r.id)) : allRoutes;
+    // Prefer client-supplied route definitions (reflect any combine/split edits
+    // made on the review screen); fall back to the stored job result by id.
+    let selected;
+    if (Array.isArray(req.body?.routes) && req.body.routes.length > 0) {
+      selected = req.body.routes;
+    } else {
+      const allRoutes = job.result.routes || [];
+      const selectedIds = Array.isArray(req.body?.routeIds) ? new Set(req.body.routeIds) : null;
+      selected = selectedIds ? allRoutes.filter((r) => selectedIds.has(r.id)) : allRoutes;
+    }
 
     if (selected.length === 0) {
       return res.status(400).json({ error: 'No routes selected to create' });

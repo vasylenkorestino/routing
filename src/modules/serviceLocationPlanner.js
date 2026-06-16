@@ -18,6 +18,7 @@ const logger = require('../utils/logger');
 
 const DEFAULTS = {
   maxStops: 25,
+  minStopsPerRoute: 3, // merge tiny trailing routes when capacity allows
   maxGallons: 1800,
   maxDurationMin: 480,
   serviceTimeMin: 15,
@@ -33,6 +34,7 @@ function resolveOpts(params) {
   const strategy = params.strategy || process.env.TSP_STRATEGY || 'haversine';
   return {
     maxStops: clampNum(params.maxStops, DEFAULTS.maxStops, 1, 200),
+    minStopsPerRoute: clampNum(params.minStopsPerRoute, DEFAULTS.minStopsPerRoute, 1, 200),
     maxGallons: clampNum(params.maxGallons, DEFAULTS.maxGallons, 1, 100000),
     maxDurationMin: clampNum(params.maxDurationMin, DEFAULTS.maxDurationMin, 30, 1440),
     serviceTimeMin: clampNum(params.serviceTimeMin, DEFAULTS.serviceTimeMin, 0, 240),
@@ -180,22 +182,19 @@ async function plan(params, onProgress = () => {}) {
     const depotAccts = byDepot.get(depot.id) || [];
     if (depotAccts.length === 0) continue;
 
-    const sectors = new Map();
-    for (const acct of depotAccts) {
-      const brng = bearing(
-        { lat: depot.lat, lng: depot.lng },
-        { lat: Number(acct.MALatitude__c), lng: Number(acct.MALongitude__c) }
-      );
-      const sec = sectorFor(brng, opts.sectorCount);
-      if (!sectors.has(sec.idx)) sectors.set(sec.idx, { label: sec.label, accounts: [] });
-      sectors.get(sec.idx).accounts.push(acct);
-    }
+    // Sweep algorithm: order accounts by bearing around the depot, then fill each
+    // route to capacity (stops + gallons) before starting the next. This keeps
+    // routes geographically contiguous AND full, instead of fragmenting each
+    // compass sector into tiny 1-2 stop routes.
+    const ordered = depotAccts
+      .map((a) => ({ acct: a, brng: bearing({ lat: depot.lat, lng: depot.lng }, { lat: Number(a.MALatitude__c), lng: Number(a.MALongitude__c) }) }))
+      .sort((x, y) => x.brng - y.brng)
+      .map((w) => w.acct);
 
-    for (const { label, accounts: sectorAccts } of sectors.values()) {
-      sectorAccts.sort((a, b) => a._distFromDepot - b._distFromDepot);
-      for (const group of splitByCapacity(sectorAccts, opts)) {
-        bins.push({ depot, sectorLabel: label, accounts: group });
-      }
+    const groups = mergeUndersized(splitByCapacity(ordered, opts), opts);
+    for (const group of groups) {
+      const label = sectorFor(meanBearing(group, depot), opts.sectorCount).label;
+      bins.push({ depot, sectorLabel: label, accounts: group });
     }
   }
   counters.clustersBuilt = bins.length;
@@ -233,6 +232,48 @@ async function plan(params, onProgress = () => {}) {
   });
 
   return { routes: finalRoutes, summary, warnings };
+}
+
+/**
+ * Merges trailing/under-sized bins into a neighbor when the combined bin still
+ * fits the stop + gallon caps. Reduces the number of tiny routes the sweep can
+ * leave at sector boundaries.
+ */
+function mergeUndersized(bins, opts) {
+  const minStops = Math.max(1, opts.minStopsPerRoute || 1);
+  if (minStops <= 1 || bins.length <= 1) return bins;
+
+  const result = [];
+  for (const bin of bins) {
+    const prev = result[result.length - 1];
+    if (
+      bin.length < minStops &&
+      prev &&
+      prev.length + bin.length <= opts.maxStops &&
+      gallonsOf(prev, opts) + gallonsOf(bin, opts) <= opts.maxGallons
+    ) {
+      result[result.length - 1] = prev.concat(bin);
+    } else {
+      result.push(bin);
+    }
+  }
+  return result;
+}
+
+function gallonsOf(accounts, opts) {
+  return accounts.reduce((s, a) => s + estGallons(a, opts), 0);
+}
+
+/** Average compass bearing (degrees) of a group of accounts relative to the depot. */
+function meanBearing(accounts, depot) {
+  let sumSin = 0;
+  let sumCos = 0;
+  for (const a of accounts) {
+    const b = toRad(bearing({ lat: depot.lat, lng: depot.lng }, { lat: Number(a.MALatitude__c), lng: Number(a.MALongitude__c) }));
+    sumSin += Math.sin(b);
+    sumCos += Math.cos(b);
+  }
+  return (Math.atan2(sumSin, sumCos) * 180) / Math.PI;
 }
 
 /** Greedy bin-packing of accounts into routes bounded by stop count and estimated gallons. */
@@ -357,9 +398,11 @@ function buildSummary(routes, counters, opts, scope) {
     totalDurationMin: totalDuration,
     caps: {
       maxStops: opts.maxStops,
+      minStopsPerRoute: opts.minStopsPerRoute,
       maxGallons: opts.maxGallons,
       maxDurationMin: opts.maxDurationMin,
       serviceTimeMin: opts.serviceTimeMin,
+      avgSpeedMph: opts.avgSpeedMph,
     },
     counters,
   };

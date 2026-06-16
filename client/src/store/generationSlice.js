@@ -1,4 +1,5 @@
 import * as routingApi from '../api/routing';
+import { combineRoutes, splitRoute, recomputeSummary } from '../utils/routeRecompute';
 
 const IDLE_PROGRESS = { step: 'idle', label: '', counters: {}, percent: 0 };
 const MAX_HISTORY = 25;
@@ -104,20 +105,61 @@ const generationSlice = (set, get) => ({
     }
   },
 
-  /** Commits selected (or all) preview routes to Salesforce. */
+  /** Commits selected (or all) preview routes to Salesforce, honoring local edits. */
   commitGeneratedRoutes: async (routeIds) => {
     const id = get().genJobId;
     if (!id) return null;
+    const all = get().genResult?.routes || [];
+    const ids = routeIds && routeIds.length ? new Set(routeIds) : null;
+    const selected = ids ? all.filter((r) => ids.has(r.id)) : all;
+    const routes = selected.map((r) => ({
+      id: r.id,
+      routeName: r.routeName,
+      recordType: r.recordType,
+      serviceLocationId: r.serviceLocationId,
+      accountIds: r.accountIds,
+    }));
     set({ genCommitting: true });
     try {
-      const body = routeIds && routeIds.length ? { routeIds } : {};
-      const result = await routingApi.commitGeneratedRoutes(id, body);
+      const result = await routingApi.commitGeneratedRoutes(id, { routes });
       set({ genCommitting: false, genCommitResult: result });
       return result;
     } catch (err) {
       set({ genCommitting: false });
       throw err;
     }
+  },
+
+  /** Replaces the preview route list and recomputes summary totals. */
+  setGeneratedRoutes: (routes) => set((s) => ({
+    genResult: s.genResult ? { ...s.genResult, routes, summary: recomputeSummary(s.genResult.summary, routes) } : s.genResult,
+  })),
+
+  /** Merges the given route ids into a single route (in-memory preview only). */
+  combineGeneratedRoutes: (routeIds) => {
+    const state = get();
+    const routes = state.genResult?.routes || [];
+    const caps = state.genResult?.summary?.caps || {};
+    const ids = new Set(routeIds);
+    const toMerge = routes.filter((r) => ids.has(r.id));
+    if (toMerge.length < 2) return null;
+    const merged = combineRoutes(toMerge, caps);
+    const next = [merged, ...routes.filter((r) => !ids.has(r.id))];
+    state.setGeneratedRoutes(next);
+    return merged.id;
+  },
+
+  /** Splits a single route into two halves (in-memory preview only). */
+  splitGeneratedRoute: (routeId) => {
+    const state = get();
+    const routes = state.genResult?.routes || [];
+    const caps = state.genResult?.summary?.caps || {};
+    const target = routes.find((r) => r.id === routeId);
+    if (!target || target.stops.length < 2) return null;
+    const [a, b] = splitRoute(target, caps);
+    const next = routes.flatMap((r) => (r.id === routeId ? [a, b] : [r]));
+    state.setGeneratedRoutes(next);
+    return a.id;
   },
 
   /** Re-runs generation with the last-used parameters. */

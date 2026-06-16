@@ -70,6 +70,7 @@ function LocationForm({ recordTypes, serviceLocations, serviceDate, onStart, onC
     serviceLocationId: '',
     maxRadiusMiles: '',
     maxStops: 25,
+    minStopsPerRoute: 3,
     maxGallons: 1800,
     maxDurationMin: 480,
     serviceTimeMin: 15,
@@ -89,6 +90,7 @@ function LocationForm({ recordTypes, serviceLocations, serviceDate, onStart, onC
         serviceLocationId: form.depotScope === 'single' ? form.serviceLocationId : null,
         maxRadiusMiles: form.depotScope === 'single' && form.maxRadiusMiles ? Number(form.maxRadiusMiles) : null,
         maxStops: Number(form.maxStops),
+        minStopsPerRoute: Number(form.minStopsPerRoute),
         maxGallons: Number(form.maxGallons),
         maxDurationMin: Number(form.maxDurationMin),
         serviceTimeMin: Number(form.serviceTimeMin),
@@ -139,10 +141,11 @@ function LocationForm({ recordTypes, serviceLocations, serviceDate, onStart, onC
 
       <div className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wide mb-2">Route Limits</div>
       <div className="grid grid-cols-2 gap-3 mb-4">
+        <Field label="Min Stops / Route"><input type="number" min="1" className="input-field" value={form.minStopsPerRoute} onChange={set('minStopsPerRoute')} /></Field>
         <Field label="Max Stops / Route"><input type="number" min="1" className="input-field" value={form.maxStops} onChange={set('maxStops')} /></Field>
         <Field label="Max Gallons / Route"><input type="number" min="1" className="input-field" value={form.maxGallons} onChange={set('maxGallons')} /></Field>
         <Field label="Max Duration (min)"><input type="number" min="30" className="input-field" value={form.maxDurationMin} onChange={set('maxDurationMin')} /></Field>
-        <Field label="Service Time / Stop (min)"><input type="number" min="0" className="input-field" value={form.serviceTimeMin} onChange={set('serviceTimeMin')} /></Field>
+        <Field label="Service Time / Stop (min)" className="col-span-2"><input type="number" min="0" className="input-field" value={form.serviceTimeMin} onChange={set('serviceTimeMin')} /></Field>
       </div>
 
       <Actions loading={loading} onClose={onClose} onGenerate={handleGenerate} label="Generate" />
