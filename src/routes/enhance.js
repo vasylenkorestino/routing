@@ -6,6 +6,10 @@ const { logErrorToSalesforce } = require('../services/errorLogger');
 const { logAction } = require('../services/actionLogger');
 const { createRecorder } = require('../services/stepRecorder');
 const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
+const aiJobs = require('../services/aiJobs');
+const { publishJobProgress } = require('../services/aiJobPublisher');
+const { runEnhancePipeline, ANALYZE_STOPS_SYSTEM } = require('../services/enhancePipeline');
+const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 
 const ANALYZE_SYSTEM = `You are an AI route analyst for a UCO (Used Cooking Oil) collection company. You analyze route stops AND discover new accounts to add.
@@ -296,6 +300,58 @@ router.post('/', async (req, res, next) => {
 });
 
 /**
+ * POST /api/enhance-route/async — start async enhance job; progress via SSE ai-progress.
+ */
+router.post('/async', (req, res) => {
+  const { googleRouteId } = req.body || {};
+  if (!googleRouteId) return res.status(400).json({ error: 'googleRouteId is required' });
+
+  const owner = aiJobs.resolveOwner(req);
+  const job = aiJobs.create({ type: 'enhance', params: { googleRouteId }, owner });
+  res.status(202).json({ jobId: job.id, status: job.status });
+  publishJobProgress(job.id);
+
+  const t0 = Date.now();
+  const userName = req.driver?.name;
+
+  setImmediate(async () => {
+    try {
+      const { responsePayload, recorder, aiTexts } = await runEnhancePipeline(googleRouteId, job.id, userName);
+      aiJobs.complete(job.id, responsePayload);
+      publishJobProgress(job.id, { status: 'complete' });
+      logAction({
+        action: 'AI Enhance',
+        status: 'Success',
+        requestBody: { googleRouteId },
+        responseBody: responsePayload,
+        aiPrompt: ANALYZE_STOPS_SYSTEM,
+        aiResponse: aiTexts.stopsText,
+        durationMs: Date.now() - t0,
+        userInfo: userName,
+        googleRouteId,
+        source: 'POST /enhance-route/async',
+        steps: recorder.steps,
+      });
+    } catch (err) {
+      aiJobs.fail(job.id, err);
+      publishJobProgress(job.id, { status: 'error', error: err.message });
+      logAction({
+        action: 'AI Enhance',
+        status: 'Error',
+        requestBody: req.body,
+        responseBody: err.message,
+        durationMs: Date.now() - t0,
+        userInfo: userName,
+        googleRouteId,
+        source: 'POST /enhance-route/async',
+      });
+      logErrorToSalesforce({ errorType: 'AIEnhanceError', errorMessage: err.message, stackTrace: err.stack, source: 'enhance-route/async' });
+      logger.error('[enhance/async] job failed', { jobId: job.id, error: err.message });
+    }
+  });
+});
+
+/**
  * POST /api/enhance-route/approve — apply manager decisions to RouteLog__c.
  *
  * Outcome semantics (resolved on the client from each log's flag + decision):
@@ -347,6 +403,16 @@ router.post('/approve', async (req, res, next) => {
       Accepted_Date__c: now,
     }));
     await conn.sobject('RouteLog__c').update(updates);
+
+    for (const i of items) {
+      enqueueFeedback({
+        type: 'route_log_status',
+        logId: i.logId,
+        status: statusFor(i.outcome),
+        outcome: i.outcome,
+        source: 'enhance_approve',
+      });
+    }
 
     const removed = [];
     for (const id of removeIds) {

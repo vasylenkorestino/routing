@@ -2,6 +2,44 @@ const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../config/anthropic');
 const logger = require('../utils/logger');
 
+const TOOL_LABELS = {
+  salesforce_query: 'Querying Salesforce',
+  route_analysis: 'Analyzing route history',
+  account_discovery: 'Discovering accounts',
+  route_enhancement: 'Enhancing route',
+  route_generation: 'Generating routes',
+  route_parameters: 'Loading route parameters',
+  geo_utils: 'Running geo calculations',
+  route_logger: 'Logging decisions',
+  account_route_history: 'Reviewing account history',
+  multi_route_context: 'Loading multi-route context',
+  agent_memory: 'Accessing agent memory',
+};
+
+const MAX_PARALLEL_TOOLS = 3;
+
+/** Sleep helper for rate-limit backoff. */
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Calls Anthropic with exponential backoff on 429/rate limits. */
+async function createMessageWithRetry(client, params, maxRetries = 3) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await client.messages.create(params);
+    } catch (err) {
+      const isRateLimit = err?.status === 429 || /rate limit/i.test(err?.message || '');
+      if (!isRateLimit || attempt >= maxRetries) throw err;
+      const delay = Math.min(1000 * 2 ** attempt, 8000);
+      logger.warn(`Anthropic rate limit, retrying in ${delay}ms`);
+      await sleep(delay);
+      attempt += 1;
+    }
+  }
+}
+
 const SYSTEM_PROMPT = `You are an AI routing agent for a UCO (Used Cooking Oil) collection company. You determine when each account actually needs service and generate daily optimized routes. Your goal: reduce miles driven, reduce empty stops, prevent tank overflows, and increase gallons collected per route.
 
 DATA MODEL:
@@ -114,31 +152,48 @@ DATA PRIVACY (mandatory):
 - Case.Description is not available; use ticket Type/Status only.
 - If a user asks for customer contact details, refuse and explain that routing AI does not access PII.`;
 
-/** Creates an orchestrator that runs a multi-turn tool-use loop with Claude.
- *  Optional `recorder` (from stepRecorder) captures each Claude turn and tool call as a step. */
-function createOrchestrator(toolDefinitions, skillRegistry, recorder) {
+/**
+ * Creates an orchestrator that runs a multi-turn tool-use loop with Claude.
+ * Options: recorder, onProgress({ phase, iteration, label, toolName, detail }), systemPrompt, priorMessages
+ */
+function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = {}) {
   const client = new Anthropic({ apiKey: config.apiKey });
+  const onProgress = options.onProgress;
+  const systemPrompt = options.systemPrompt || SYSTEM_PROMPT;
+  const priorMessages = options.priorMessages || [];
+
+  const emit = (payload) => {
+    if (typeof onProgress === 'function') {
+      try { onProgress(payload); } catch (err) {
+        logger.warn('[orchestrator] onProgress failed', { error: err.message });
+      }
+    }
+  };
 
   return {
     async run(userMessage) {
-      const messages = [{ role: 'user', content: userMessage }];
+      const messages = priorMessages.length
+        ? [...priorMessages, { role: 'user', content: userMessage }]
+        : [{ role: 'user', content: userMessage }];
       let finalText = '';
-      let toolResults = [];
       let iterations = 0;
       const MAX_ITERATIONS = 20;
+
+      emit({ phase: 'thinking', iteration: 0, label: 'Understanding your request…' });
 
       while (iterations < MAX_ITERATIONS) {
         iterations++;
         logger.info(`Orchestrator iteration ${iterations}`);
+        emit({ phase: 'thinking', iteration: iterations, label: `Analyzing (step ${iterations})…` });
 
         const turnInput = messages.length === 1 ? userMessage : `[turn ${iterations}] continuation`;
         const turnT0 = Date.now();
         let response;
         try {
-          response = await client.messages.create({
+          response = await createMessageWithRetry(client, {
             model: config.model,
             max_tokens: config.maxTokens,
-            system: SYSTEM_PROMPT,
+            system: systemPrompt,
             tools: toolDefinitions,
             messages,
           });
@@ -148,7 +203,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder) {
               skill: `Claude Reasoning (turn ${iterations})`,
               type: 'AI Call',
               status: 'Error',
-              prompt: SYSTEM_PROMPT,
+              prompt: systemPrompt,
               input: turnInput,
               error: err?.message || String(err),
               durationMs: Date.now() - turnT0,
@@ -163,62 +218,67 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder) {
 
         if (recorder) {
           const toolNames = toolUseBlocks.map((t) => t.name).join(', ');
-          const turnOutput = turnText
-            + (toolUseBlocks.length ? `\n\n[requested tools: ${toolNames}]` : '')
-            + `\n[stop_reason: ${response.stop_reason || 'unknown'}]`;
           recorder.record({
             skill: `Claude Reasoning (turn ${iterations})`,
             type: 'AI Call',
             status: 'Success',
-            prompt: SYSTEM_PROMPT,
+            prompt: systemPrompt,
             input: turnInput,
-            output: turnOutput,
+            output: turnText + (toolNames ? `\n[tools: ${toolNames}]` : ''),
             durationMs: Date.now() - turnT0,
           });
         }
 
-        if (textBlocks.length > 0) {
-          finalText = turnText;
-        }
+        if (textBlocks.length > 0) finalText = turnText;
 
-        if (response.stop_reason === 'end_turn' || toolUseBlocks.length === 0) {
-          break;
-        }
+        if (response.stop_reason === 'end_turn' || toolUseBlocks.length === 0) break;
 
         messages.push({ role: 'assistant', content: response.content });
 
-        toolResults = [];
-        for (const toolUse of toolUseBlocks) {
-          logger.info(`Tool call: ${toolUse.name}`, { input: JSON.stringify(toolUse.input).substring(0, 300) });
+        const batches = [];
+        for (let i = 0; i < toolUseBlocks.length; i += MAX_PARALLEL_TOOLS) {
+          batches.push(toolUseBlocks.slice(i, i + MAX_PARALLEL_TOOLS));
+        }
 
-          const toolT0 = Date.now();
-          let result;
-          let toolError = null;
-          try {
-            result = await skillRegistry.execute(toolUse.name, toolUse.input);
-          } catch (err) {
-            logger.error(`Tool ${toolUse.name} failed`, { error: err.message });
-            result = { error: err.message };
-            toolError = err.message;
-          }
+        const toolResults = [];
+        for (const batch of batches) {
+          const batchResults = await Promise.all(batch.map(async (toolUse) => {
+            const label = TOOL_LABELS[toolUse.name] || toolUse.name;
+            emit({ phase: 'tool', iteration: iterations, toolName: toolUse.name, label: `${label}…` });
+            logger.info(`Tool call: ${toolUse.name}`, { input: JSON.stringify(toolUse.input).substring(0, 300) });
 
-          if (recorder) {
-            recorder.record({
-              skill: toolUse.name,
-              type: 'Tool Use',
-              status: toolError ? 'Error' : 'Success',
-              input: toolUse.input,
-              output: toolError ? null : result,
-              error: toolError,
-              durationMs: Date.now() - toolT0,
-            });
-          }
+            const toolT0 = Date.now();
+            let result;
+            let toolError = null;
+            try {
+              result = await skillRegistry.execute(toolUse.name, toolUse.input);
+            } catch (err) {
+              logger.error(`Tool ${toolUse.name} failed`, { error: err.message });
+              result = { error: err.message };
+              toolError = err.message;
+            }
 
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(result).substring(0, 50000),
-          });
+            if (recorder) {
+              recorder.record({
+                skill: toolUse.name,
+                type: 'Tool Use',
+                status: toolError ? 'Error' : 'Success',
+                input: toolUse.input,
+                output: toolError ? null : result,
+                error: toolError,
+                durationMs: Date.now() - toolT0,
+              });
+            }
+
+            emit({ phase: 'finding', iteration: iterations, toolName: toolUse.name, label, detail: toolError ? 'Failed' : 'Done' });
+
+            return {
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: JSON.stringify(result).substring(0, 50000),
+            };
+          }));
+          toolResults.push(...batchResults);
         }
 
         messages.push({ role: 'user', content: toolResults });
@@ -234,4 +294,4 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder) {
   };
 }
 
-module.exports = { createOrchestrator };
+module.exports = { createOrchestrator, SYSTEM_PROMPT, TOOL_LABELS };

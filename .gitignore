@@ -20,3 +20,5 @@ npm-debug.log*
 
 client/dist/
 dist/
+
+.data/

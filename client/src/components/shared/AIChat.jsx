@@ -1,10 +1,16 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import useStore from '../../store';
-import { chat, enhanceRoute, generateRoutes } from '../../api/routing';
+import { chatAsync } from '../../api/routing';
+import AIProgressSteps from './AIProgressSteps';
+import { toast } from '../ui/Toast';
 
-/** Collapsible & resizable AI chat panel */
+/** Collapsible AI chat panel with async progress and live placeholder messages. */
 export default function AIChat() {
-  const { chatMessages, isGenerating, addMessage, setGenerating, clearChat } = useStore();
+  const {
+    chatMessages, isGenerating, addMessage, updateMessage, setGenerating, clearChat,
+    chatSessionId, setChatSessionId,
+    trackAIJob, clearAIJob, aiJobStatus, aiJobSteps, aiJobFindings, aiJobProgress, aiJobMessage, aiJobError,
+  } = useStore();
   const route = useStore((s) => s.route);
   const routes = useStore((s) => s.routes);
   const recordType = useStore((s) => s.recordType);
@@ -12,6 +18,7 @@ export default function AIChat() {
   const aiSelectedRouteIds = useStore((s) => s.aiSelectedRouteIds);
   const clearAiSelection = useStore((s) => s.clearAiSelection);
   const [input, setInput] = useState('');
+  const [activePlaceholderIdx, setActivePlaceholderIdx] = useState(null);
   const scrollRef = useRef(null);
 
   const selectedRoutes = routes.filter((r) => aiSelectedRouteIds[r.Id ?? r.id]);
@@ -63,38 +70,75 @@ export default function AIChat() {
     };
   }, [route, selectedCount, selectedRoutes, serviceDate, recordType]);
 
+  useEffect(() => {
+    if (activePlaceholderIdx == null || aiJobStatus === 'idle') return;
+    updateMessage(activePlaceholderIdx, {
+      jobSteps: aiJobSteps,
+      jobFindings: aiJobFindings,
+      jobProgress: aiJobProgress,
+      content: aiJobStatus === 'complete' && aiJobMessage
+        ? aiJobMessage
+        : undefined,
+      isPlaceholder: aiJobStatus !== 'complete',
+    });
+    if (aiJobStatus === 'complete') {
+      setGenerating(false);
+      setActivePlaceholderIdx(null);
+      clearAIJob();
+      scrollBottom();
+    } else if (aiJobStatus === 'error') {
+      updateMessage(activePlaceholderIdx, {
+        content: aiJobError || 'Sorry, something went wrong. Please try again.',
+        isPlaceholder: false,
+      });
+      setGenerating(false);
+      setActivePlaceholderIdx(null);
+      clearAIJob();
+      scrollBottom();
+    }
+  }, [activePlaceholderIdx, aiJobStatus, aiJobSteps, aiJobFindings, aiJobProgress, aiJobMessage, aiJobError, updateMessage, setGenerating, clearAIJob, scrollBottom]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
+    if (isGenerating) {
+      toast.error('Please wait for the current response');
+      return;
+    }
+
     addMessage({ role: 'user', content: text });
     setInput('');
     setGenerating(true);
     scrollBottom();
 
+    const context = buildContext();
+    const body = { message: text, recordType, context, sessionId: chatSessionId };
+
     try {
-      const context = buildContext();
-      const body = { message: text, recordType, context };
-      let res;
-      if (selectedCount > 0) {
-        res = await chat(body);
-      } else if (text.toLowerCase().includes('generate')) {
-        res = await generateRoutes(body);
-      } else if (text.toLowerCase().includes('enhance')) {
-        res = await enhanceRoute({ ...body, googleRouteId: route?.Id });
-      } else {
-        res = await chat(body);
-      }
-      addMessage({ role: 'assistant', content: res.message ?? res.reply ?? JSON.stringify(res) });
+      const { jobId, sessionId } = await chatAsync(body);
+      if (sessionId && !chatSessionId) setChatSessionId(sessionId);
+
+      addMessage({
+        role: 'assistant',
+        content: '',
+        isPlaceholder: true,
+        jobSteps: [],
+        jobFindings: [],
+        jobProgress: { label: 'Starting…', percent: 0 },
+      });
+      const placeholderIdx = useStore.getState().chatMessages.length - 1;
+      setActivePlaceholderIdx(placeholderIdx);
+
+      await trackAIJob(jobId, 'chat');
     } catch (err) {
       addMessage({ role: 'assistant', content: `Error: ${err.message}` });
+      setGenerating(false);
     }
-    setGenerating(false);
     scrollBottom();
-  }, [input, addMessage, setGenerating, scrollBottom, buildContext, recordType, route, selectedCount]);
+  }, [input, isGenerating, addMessage, setGenerating, scrollBottom, buildContext, recordType, chatSessionId, setChatSessionId, route, selectedCount, trackAIJob]);
 
   return (
     <div className="flex flex-col h-full bg-surface">
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-2" ref={scrollRef}>
         {chatMessages.length === 0 && (
           <div className="text-txt-secondary text-xs text-center py-4">
@@ -104,21 +148,27 @@ export default function AIChat() {
         {chatMessages.map((m, i) => (
           <div
             key={i}
-            className={`max-w-[85%] px-3 py-2 rounded-xl text-[13px] leading-relaxed break-words whitespace-pre-wrap ${
+            className={`max-w-[85%] px-3 py-2 rounded-xl text-[13px] leading-relaxed break-words ${
               m.role === 'user'
-                ? 'self-end bg-primary text-white rounded-br-sm'
+                ? 'self-end bg-primary text-white rounded-br-sm whitespace-pre-wrap'
                 : 'self-start bg-bg text-txt rounded-bl-sm'
             }`}
           >
-            {m.content}
+            {m.isPlaceholder ? (
+              <AIProgressSteps
+                compact
+                steps={m.jobSteps || []}
+                findings={m.jobFindings || []}
+                progress={m.jobProgress || {}}
+                status={isGenerating ? 'running' : 'complete'}
+              />
+            ) : (
+              <span className="whitespace-pre-wrap">{m.content}</span>
+            )}
           </div>
         ))}
-        {isGenerating && (
-          <div className="self-start px-3 py-2 rounded-xl bg-bg text-txt-secondary text-sm animate-pulse">Thinking…</div>
-        )}
       </div>
 
-      {/* Selected routes pill */}
       {selectedCount > 0 && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-t border-border bg-ai-bg/60">
           <span className="text-[11px] font-medium text-ai">
@@ -137,7 +187,6 @@ export default function AIChat() {
         </div>
       )}
 
-      {/* Input */}
       <div className="flex gap-2 px-3 py-2 border-t border-border">
         {chatMessages.length > 0 && (
           <button
@@ -155,7 +204,8 @@ export default function AIChat() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-          placeholder="Ask AI…"
+          placeholder={isGenerating ? 'Processing…' : 'Ask AI…'}
+          disabled={isGenerating}
         />
         <button
           className="h-8 px-4 rounded-lg bg-ai text-white text-xs font-medium hover:bg-ai-hover transition disabled:opacity-50"

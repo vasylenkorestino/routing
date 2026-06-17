@@ -6,6 +6,7 @@ const { logErrorToSalesforce } = require('../services/errorLogger');
 const { logAction } = require('../services/actionLogger');
 const { createRecorder } = require('../services/stepRecorder');
 const anthropicConfig = require('../config/anthropic');
+const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 const accountSelector = require('../modules/accountSelector');
 const routeOptimizer = require('../modules/routeOptimizer');
@@ -322,6 +323,14 @@ router.post('/route-log-comments', wrap(async (req, res) => {
     Body__c: body,
     Author__c: authorName,
     Is_AI__c: false,
+  });
+
+  enqueueFeedback({
+    type: 'route_log_comment',
+    logId: routeLogId,
+    commentId: humanComment.id,
+    source: 'manager_comment',
+    detail: body,
   });
 
   let aiReply = null;

@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import useStore from '../../store';
 import * as routingApi from '../../api/routing';
-import { OverlaySpinner } from '../ui/Spinner';
+import AIProgressSteps from '../shared/AIProgressSteps';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 
@@ -12,9 +12,21 @@ const ACTION_STYLE = {
   add: { bg: 'bg-ai/10', border: 'border-ai/30', text: 'text-ai', label: 'Add' },
 };
 
+/** Modal for AI route analysis with live async progress. */
 export default function AIEnhanceModal() {
   const route = useStore((s) => s.route);
   const closeModal = useStore((s) => s.closeModal);
+  const trackAIJob = useStore((s) => s.trackAIJob);
+  const clearAIJob = useStore((s) => s.clearAIJob);
+  const aiJobStatus = useStore((s) => s.aiJobStatus);
+  const aiJobSteps = useStore((s) => s.aiJobSteps);
+  const aiJobFindings = useStore((s) => s.aiJobFindings);
+  const aiJobProgress = useStore((s) => s.aiJobProgress);
+  const aiJobPartialResults = useStore((s) => s.aiJobPartialResults);
+  const aiJobResult = useStore((s) => s.aiJobResult);
+  const aiJobError = useStore((s) => s.aiJobError);
+  const refreshAIJob = useStore((s) => s.refreshAIJob);
+
   const [phase, setPhase] = useState('idle');
   const [summary, setSummary] = useState('');
   const [existing, setExisting] = useState([]);
@@ -28,23 +40,47 @@ export default function AIEnhanceModal() {
 
   const allRecs = [...existing, ...additions];
 
+  useEffect(() => {
+    if (phase !== 'analyzing') return;
+    if (aiJobPartialResults.existingStops?.length) setExisting(aiJobPartialResults.existingStops);
+    if (aiJobPartialResults.suggestedAdds?.length) setAdditions(aiJobPartialResults.suggestedAdds);
+    if (aiJobPartialResults.summary) setSummary(aiJobPartialResults.summary);
+    if (aiJobPartialResults.totalStops != null) setTotalStops(aiJobPartialResults.totalStops);
+    if (aiJobPartialResults.nearbyCount != null) setNearbyCount(aiJobPartialResults.nearbyCount);
+  }, [phase, aiJobPartialResults]);
+
+  useEffect(() => {
+    if (phase !== 'analyzing') return;
+    if (aiJobStatus === 'complete' && aiJobResult) {
+      setSummary(aiJobResult.summary || '');
+      setExisting(aiJobResult.existingStops || []);
+      setAdditions(aiJobResult.suggestedAdds || []);
+      setTotalStops(aiJobResult.totalStops || 0);
+      setNearbyCount(aiJobResult.nearbyCount || 0);
+      setPhase('results');
+      clearAIJob();
+    } else if (aiJobStatus === 'error') {
+      toast.error(aiJobError || 'Analysis failed');
+      setPhase('idle');
+      clearAIJob();
+    }
+  }, [phase, aiJobStatus, aiJobResult, aiJobError, clearAIJob]);
+
   const handleAnalyze = useCallback(async () => {
     if (!route?.Id) return;
     setPhase('analyzing');
     setFilter(null);
+    setSummary('');
+    setExisting([]);
+    setAdditions([]);
     try {
-      const data = await routingApi.enhanceRoute({ googleRouteId: route.Id });
-      setSummary(data.summary || '');
-      setExisting(data.existingStops || []);
-      setAdditions(data.suggestedAdds || []);
-      setTotalStops(data.totalStops || 0);
-      setNearbyCount(data.nearbyCount || 0);
-      setPhase('results');
+      const { jobId } = await routingApi.enhanceRouteAsync({ googleRouteId: route.Id });
+      await trackAIJob(jobId, 'enhance');
     } catch (err) {
       toast.error(getErrorMessage(err));
       setPhase('idle');
     }
-  }, [route]);
+  }, [route, trackAIJob]);
 
   const refreshRoutes = useStore((s) => s.refreshRoutes);
 
@@ -52,7 +88,7 @@ export default function AIEnhanceModal() {
     setApproving((p) => ({ ...p, [logId]: true }));
     try {
       const res = await routingApi.approveRouteLogs({ logIds: [logId], status });
-      const update = (list) => list.map((r) => r.logId === logId ? { ...r, _status: status } : r);
+      const update = (list) => list.map((r) => (r.logId === logId ? { ...r, _status: status } : r));
       setExisting(update);
       setAdditions(update);
       if (res?.added?.length) refreshRoutes?.();
@@ -66,7 +102,7 @@ export default function AIEnhanceModal() {
     setApproving((p) => { const n = { ...p }; pendingIds.forEach((id) => { n[id] = true; }); return n; });
     try {
       const res = await routingApi.approveRouteLogs({ logIds: pendingIds, status: 'Accepted' });
-      const update = (list) => list.map((r) => pendingIds.includes(r.logId) ? { ...r, _status: 'Accepted' } : r);
+      const update = (list) => list.map((r) => (pendingIds.includes(r.logId) ? { ...r, _status: 'Accepted' } : r));
       setExisting(update);
       setAdditions(update);
       toast.success(`${pendingIds.length} approved`);
@@ -75,7 +111,10 @@ export default function AIEnhanceModal() {
     finally { setApproving({}); }
   }, [allRecs, refreshRoutes]);
 
-  const close = () => closeModal('isAIEnhance');
+  const close = () => {
+    clearAIJob();
+    closeModal('isAIEnhance');
+  };
 
   const kept = existing.filter((r) => r.action === 'keep').length;
   const flagged = existing.filter((r) => r.action === 'remove' || r.action === 'flag').length;
@@ -92,13 +131,11 @@ export default function AIEnhanceModal() {
   const filteredAdds = filter === 'keep' || filter === 'flagged' ? [] : applyFilter(additions);
   const showExisting = filter !== 'add';
   const showAdds = filter !== 'keep' && filter !== 'flagged';
+  const showPartialResults = phase === 'analyzing' && (existing.length > 0 || additions.length > 0);
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40" onClick={close}>
       <div className="w-[720px] max-w-[95vw] max-h-[85vh] bg-surface rounded-xl shadow-2xl flex flex-col overflow-hidden relative" onClick={(e) => e.stopPropagation()}>
-        {phase === 'analyzing' && <OverlaySpinner label="AI is analyzing your route…" />}
-
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-ai text-sm">✦</span>
@@ -108,7 +145,6 @@ export default function AIEnhanceModal() {
           <button onClick={close} className="text-txt-secondary hover:text-txt text-lg leading-none">×</button>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-auto p-5">
           {phase === 'idle' && (
             <div className="flex flex-col items-center justify-center py-12 gap-4 text-center">
@@ -125,6 +161,31 @@ export default function AIEnhanceModal() {
             </div>
           )}
 
+          {phase === 'analyzing' && (
+            <div className="space-y-4">
+              <AIProgressSteps
+                steps={aiJobSteps}
+                findings={aiJobFindings}
+                progress={aiJobProgress}
+                status={aiJobStatus}
+              />
+              <button type="button" className="text-[11px] text-txt-secondary hover:text-txt" onClick={() => refreshAIJob()}>
+                Refresh progress
+              </button>
+              {showPartialResults && (
+                <div className="border-t border-border pt-3 space-y-2">
+                  <div className="text-[11px] font-semibold text-ai uppercase">Early results</div>
+                  {existing.slice(0, 5).map((rec, i) => (
+                    <div key={i} className="text-[12px] text-txt-secondary">{rec.accountName}: {rec.action}</div>
+                  ))}
+                  {additions.slice(0, 5).map((rec, i) => (
+                    <div key={`a-${i}`} className="text-[12px] text-ai">{rec.accountName}: add candidate</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {phase === 'results' && (
             <div className="flex flex-col gap-3">
               {summary && (
@@ -134,7 +195,6 @@ export default function AIEnhanceModal() {
                 </div>
               )}
 
-              {/* Clickable filter chips */}
               <div className="flex gap-1.5 flex-wrap">
                 <FilterChip label="All Stops" value={totalStops} active={filter === null} onClick={() => setFilter(null)} color="bg-bg text-txt" activeColor="bg-txt text-white" />
                 <FilterChip label="Keep" value={kept} active={filter === 'keep'} onClick={() => setFilter(filter === 'keep' ? null : 'keep')} color="bg-success/10 text-success" activeColor="bg-success text-white" />
@@ -145,29 +205,16 @@ export default function AIEnhanceModal() {
                 </div>
               </div>
 
-              {/* Existing Stops — collapsible */}
               {showExisting && filteredExisting.length > 0 && (
-                <Section
-                  title="Existing Stops"
-                  count={filteredExisting.length}
-                  expanded={expandExisting}
-                  onToggle={() => setExpandExisting((p) => !p)}
-                >
+                <Section title="Existing Stops" count={filteredExisting.length} expanded={expandExisting} onToggle={() => setExpandExisting((p) => !p)}>
                   {filteredExisting.map((rec, i) => (
                     <RecCard key={rec.logId || `e-${i}`} rec={rec} approving={approving} onApprove={handleApprove} />
                   ))}
                 </Section>
               )}
 
-              {/* Suggested Additions — collapsible */}
               {showAdds && filteredAdds.length > 0 && (
-                <Section
-                  title="✦ Suggested Additions"
-                  count={filteredAdds.length}
-                  expanded={expandAdds}
-                  onToggle={() => setExpandAdds((p) => !p)}
-                  accent
-                >
+                <Section title="✦ Suggested Additions" count={filteredAdds.length} expanded={expandAdds} onToggle={() => setExpandAdds((p) => !p)} accent>
                   {filteredAdds.map((rec, i) => (
                     <RecCard key={rec.logId || `a-${i}`} rec={rec} approving={approving} onApprove={handleApprove} />
                   ))}
@@ -181,7 +228,6 @@ export default function AIEnhanceModal() {
           )}
         </div>
 
-        {/* Footer */}
         {phase === 'results' && (
           <div className="flex items-center justify-between px-5 py-3 border-t border-border bg-bg/50 shrink-0">
             <button className="h-8 px-4 rounded-lg bg-ai text-white text-[12px] font-medium hover:bg-ai-hover transition" onClick={handleAnalyze}>
@@ -221,7 +267,7 @@ function RecCard({ rec, approving, onApprove }) {
   const style = ACTION_STYLE[rec.action] || ACTION_STYLE.flag;
   const isDone = rec._status === 'Accepted' || rec._status === 'Declined';
   return (
-    <div className={`flex items-start gap-3 p-2.5 rounded-lg border ${isDone ? 'border-border bg-bg/50 opacity-60' : style.border + ' ' + style.bg}`}>
+    <div className={`flex items-start gap-3 p-2.5 rounded-lg border ${isDone ? 'border-border bg-bg/50 opacity-60' : `${style.border} ${style.bg}`}`}>
       <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded mt-0.5 shrink-0 ${style.text} ${style.bg} border ${style.border}`}>
         {style.label}
       </span>
@@ -257,7 +303,7 @@ function RecCard({ rec, approving, onApprove }) {
 
 function FilterChip({ label, value, active, onClick, color, activeColor }) {
   return (
-    <button className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition ${active ? activeColor : color + ' hover:opacity-80'}`} onClick={onClick}>
+    <button className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition ${active ? activeColor : `${color} hover:opacity-80`}`} onClick={onClick}>
       <span className="uppercase tracking-wider">{label}</span>
       <span className="font-bold tabular-nums">{value}</span>
     </button>

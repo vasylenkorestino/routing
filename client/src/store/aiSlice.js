@@ -15,6 +15,7 @@ const aiSlice = (set, get) => ({
   isChatOpen: false,
   chatMessages: loadChat(),
   isGenerating: false,
+  chatSessionId: null,
   pendingReviewRoutes: [],
   isReviewOpen: false,
 
@@ -32,6 +33,14 @@ const aiSlice = (set, get) => ({
   },
 
   setGenerating: (isGenerating) => set({ isGenerating }),
+
+  setChatSessionId: (chatSessionId) => set({ chatSessionId }),
+
+  updateMessage: (index, patch) => {
+    const updated = get().chatMessages.map((m, i) => (i === index ? { ...m, ...patch } : m));
+    saveChat(updated);
+    set({ chatMessages: updated });
+  },
 
   loadPendingReviews: async () => {
     const data = await routingApi.getAIPending();

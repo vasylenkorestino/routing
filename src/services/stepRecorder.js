@@ -15,9 +15,9 @@ function trunc(val, max = MAX_FIELD) {
 
 /**
  * Creates an in-memory step recorder for a single request.
- * Steps are pushed in order; pass `recorder.steps` to logAction when the request completes.
+ * Optional onStep callback fires live (for SSE progress).
  */
-function createRecorder() {
+function createRecorder({ onStep } = {}) {
   const steps = [];
 
   function pushStep(partial) {
@@ -33,6 +33,11 @@ function createRecorder() {
       error: partial.error ? trunc(partial.error, 32000) : '',
     };
     steps.push(step);
+    if (typeof onStep === 'function') {
+      try { onStep(step); } catch (err) {
+        logger.error('[stepRecorder] onStep callback failed', { error: err.message });
+      }
+    }
     return step;
   }
 

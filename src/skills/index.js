@@ -8,6 +8,7 @@ const GeoUtilsSkill = require('./geoUtils');
 const RouteLoggerSkill = require('./routeLogger');
 const AccountRouteHistorySkill = require('./accountRouteHistory');
 const MultiRouteContextSkill = require('./multiRouteContext');
+const AgentMemorySkill = require('./memory/agentMemory');
 
 /** Central skill registry. Loads all skills and provides lookup by name. */
 class SkillRegistry {
@@ -28,6 +29,7 @@ class SkillRegistry {
       new RouteGenerationSkill(),
       new AccountRouteHistorySkill(),
       new MultiRouteContextSkill(),
+      new AgentMemorySkill(),
     ];
     for (const skill of defaults) {
       this.register(skill);

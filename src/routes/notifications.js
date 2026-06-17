@@ -5,6 +5,7 @@ const { getConnection } = require('../services/salesforce');
 const { subscribe } = require('../services/notificationBus');
 const { assertRouteOpen, RouteClosedError } = require('../skills/routeReadiness');
 const { triageTicket } = require('../services/ticketTriage');
+const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 
 const TRIAGE_SKILL = 'Ticket Triage';
@@ -39,8 +40,14 @@ router.get('/stream', (req, res) => {
     res.write(`: ping ${Date.now()}\n\n`);
   }, HEARTBEAT_MS);
 
+  const userKey = user?.email || user?.name || 'unknown';
+
   const unsubscribe = subscribe((message) => {
     try {
+      if (message.event === 'ai-progress') {
+        const owner = message.payload?.owner;
+        if (owner && owner !== userKey && owner !== 'api') return;
+      }
       res.write(`event: ${message.event}\n`);
       res.write(`data: ${JSON.stringify(message.payload)}\n\n`);
     } catch (err) {
@@ -121,6 +128,14 @@ router.post('/:id/accept', async (req, res, next) => {
       Read_Date__c: now,
     });
 
+    enqueueFeedback({
+      type: 'route_log_status',
+      logId: log.Id,
+      status: 'Accepted',
+      source: 'triage_accept',
+      detail: log.Reason__c,
+    });
+
     res.json({ success: true, status: 'Accepted', acceptedBy, acceptedAt: now });
   } catch (err) {
     next(err);
@@ -158,6 +173,14 @@ router.post('/:id/decline', async (req, res, next) => {
       Id: log.Id,
       Status__c: 'Declined',
       Read_Date__c: now,
+    });
+
+    enqueueFeedback({
+      type: 'route_log_status',
+      logId: log.Id,
+      status: 'Declined',
+      source: 'triage_decline',
+      detail: log.Reason__c,
     });
 
     const { ticket } = parseStoredInput(log.Input_Data__c);

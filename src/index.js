@@ -14,6 +14,10 @@ const routingRoutes = require('./routes/routing');
 const adminRoutes = require('./routes/admin');
 const webhookRoutes = require('./routes/webhooks');
 const notificationRoutes = require('./routes/notifications');
+const aiJobRoutes = require('./routes/aiJobs');
+const { runReflectionJob } = require('./agent/learning/reflectionJob');
+const { queueLength } = require('./agent/learning/feedbackObserver');
+const anthropicConfig = require('./config/anthropic');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +34,7 @@ app.use('/api', (req, res, next) => {
 });
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/ai-jobs', aiJobRoutes);
 app.use('/api/enhance-route', enhanceRoutes);
 app.use('/api/generate-routes', generateRoutes);
 app.use('/api/chat', chatRoutes);
@@ -49,6 +54,19 @@ app.use(errorHandler);
 
 app.listen(PORT, () => {
   logger.info(`Routing AI Agent running on port ${PORT}`);
+
+  const reflectionIntervalMs = Number(process.env.REFLECTION_INTERVAL_MS || 6 * 60 * 60 * 1000);
+  const reflectionTimer = setInterval(async () => {
+    try {
+      const minEvents = anthropicConfig.memory?.reflectionMinFeedbackEvents || 10;
+      if (queueLength() < minEvents) return;
+      const result = await runReflectionJob();
+      logger.info('[reflectionJob] scheduled run complete', result);
+    } catch (err) {
+      logger.error('[reflectionJob] scheduled run failed', { error: err.message });
+    }
+  }, reflectionIntervalMs);
+  if (reflectionTimer.unref) reflectionTimer.unref();
 });
 
 module.exports = app;

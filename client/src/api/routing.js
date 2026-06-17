@@ -53,7 +53,10 @@ export const getAIPending = (params) => client.get('/routing/ai-pending', { para
 export const approveAIRoutes = (body) => client.post('/routing/ai-approve', body).then((r) => r.data);
 export const declineAIRoutes = (body) => client.post('/routing/ai-decline', body).then((r) => r.data);
 export const chat = (body) => client.post('/chat', body).then((r) => r.data);
+export const chatAsync = (body) => client.post('/chat/async', body).then((r) => r.data);
 export const enhanceRoute = (body) => client.post('/enhance-route', body).then((r) => r.data);
+export const enhanceRouteAsync = (body) => client.post('/enhance-route/async', body).then((r) => r.data);
+export const getAIJob = (id) => client.get(`/ai-jobs/${id}`).then((r) => r.data);
 export const approveRouteLogs = (body) => client.post('/enhance-route/approve', body).then((r) => r.data);
 export const getRouteLogs = (googleRouteId) => client.get(`/routing/route-logs/${googleRouteId}`).then((r) => r.data);
 export const getRouteLogComments = (routeLogId) => client.get(`/routing/route-log-comments/${routeLogId}`).then((r) => r.data);
