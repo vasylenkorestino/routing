@@ -10,6 +10,7 @@ const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 const accountSelector = require('../modules/accountSelector');
 const routeOptimizer = require('../modules/routeOptimizer');
+const { fetchCompletedRoutesByName } = require('../modules/routeCompare');
 
 const router = Router();
 router.use(requireDriver);
@@ -167,30 +168,18 @@ router.get('/route-logs/:googleRouteId', wrap(async (req, res) => {
 
 /**
  * GET /routing/compare-routes — completed routes available for comparison.
- * Defaults to the same Route Name as the current route, newest first. Only
- * returns successfully completed routes (CompletionStatus__c='Complete' OR
- * Driver_Completed__c=true). Optional `search` (name LIKE) and `date` filters.
+ * Uses normalized base route name (through "Route") with LIKE filter.
  */
 router.get('/compare-routes', wrap(async (req, res) => {
-  const conn = await getSalesforceConnection();
   const { routeName, search, date, excludeId } = req.query;
-  const esc = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-
-  const where = ["(CompletionStatus__c = 'Complete' OR Driver_Completed__c = true)"];
-  if (search) where.push(`Name LIKE '%${esc(search)}%'`);
-  else if (routeName) where.push(`Name = '${esc(routeName)}'`);
-  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) where.push(`Service_Date__c = ${date}`);
-  if (excludeId) where.push(`Id != '${esc(excludeId)}'`);
-
-  const soql = `SELECT Id, Name, Service_Date__c, CreatedDate, Driver__c, DriverName__c, Driver_Completed__c, CompletionStatus__c,
-            Total_Distance__c, Total_Time__c, Gallons_Collected__c, Accounts__c, Polyline__c,
-            (SELECT Id, Name, Account__c, AccountId__c, Account_Name__c, Priority__c, Gallons_Collected__c, LastGallonsCollected__c,
-                    Container_Address__c, Latitude__c, Longitude__c, Status__c
-             FROM Routes__r WHERE AccountId__c != null ORDER BY Priority__c ASC)
-     FROM Google_Route__c WHERE ${where.join(' AND ')} ORDER BY CreatedDate DESC LIMIT 50`;
-
-  const result = await conn.query(soql);
-  res.json(result.records || []);
+  const records = await fetchCompletedRoutesByName({
+    routeName,
+    search,
+    date,
+    excludeId,
+    limit: 50,
+  });
+  res.json(records);
 }));
 
 router.get('/error-logs', wrap(async (req, res) => {

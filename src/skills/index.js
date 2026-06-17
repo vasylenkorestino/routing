@@ -8,6 +8,7 @@ const GeoUtilsSkill = require('./geoUtils');
 const RouteLoggerSkill = require('./routeLogger');
 const AccountRouteHistorySkill = require('./accountRouteHistory');
 const MultiRouteContextSkill = require('./multiRouteContext');
+const CompareRoutesSkill = require('./compareRoutes');
 const AgentMemorySkill = require('./memory/agentMemory');
 
 /** Central skill registry. Loads all skills and provides lookup by name. */
@@ -29,6 +30,7 @@ class SkillRegistry {
       new RouteGenerationSkill(),
       new AccountRouteHistorySkill(),
       new MultiRouteContextSkill(),
+      new CompareRoutesSkill(),
       new AgentMemorySkill(),
     ];
     for (const skill of defaults) {
@@ -44,9 +46,11 @@ class SkillRegistry {
     return this.skills.get(name);
   }
 
-  /** Returns Anthropic tool definitions for all registered skills. */
-  getToolDefinitions() {
-    return Array.from(this.skills.values()).map((s) => s.toToolDefinition());
+  /** Returns Anthropic tool definitions for all or named skills. */
+  getToolDefinitions(toolNames) {
+    const all = Array.from(this.skills.values());
+    if (!toolNames?.length) return all.map((s) => s.toToolDefinition());
+    return all.filter((s) => toolNames.includes(s.name)).map((s) => s.toToolDefinition());
   }
 
   /** Executes a skill by name with the given params. */

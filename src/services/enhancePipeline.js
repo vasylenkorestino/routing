@@ -5,6 +5,7 @@ const { createRecorder } = require('./stepRecorder');
 const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 const aiJobs = require('./aiJobs');
 const { publishJobProgress, progress } = require('./aiJobPublisher');
+const { analyzeRouteCompare } = require('../modules/routeCompare');
 const logger = require('../utils/logger');
 
 const TRUCK_CAPACITY_GAL = 1800;
@@ -30,6 +31,7 @@ Return ONLY valid JSON:
 
 const STEP_DEFS = [
   { id: 'load_route', label: 'Loading route data' },
+  { id: 'compare_history', label: 'Reviewing historical routes' },
   { id: 'load_locations', label: 'Reviewing service locations' },
   { id: 'analyze_stops', label: 'Analyzing current stops' },
   { id: 'find_adds', label: 'Finding add candidates' },
@@ -102,6 +104,21 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   setStep(jobId, 'load_route', 'done', `${stops.records.length} stops`);
   aiJobs.mergePartialResults(jobId, { totalStops: stops.records.length });
   aiJobs.addFinding(jobId, `Loaded route "${gRoute.Name}" with ${stops.records.length} stops`);
+
+  setStep(jobId, 'compare_history', 'running');
+  aiJobs.updateProgress(jobId, { step: 'compare_history', label: 'Reviewing historical routes…', percent: 12 });
+  publishJobProgress(jobId);
+  let historicalInsights = null;
+  try {
+    historicalInsights = await analyzeRouteCompare({ googleRouteId, routeName: gRoute.Name, limit: 15 });
+    const histCount = historicalInsights?.historicalRoutes?.length ?? 0;
+    setStep(jobId, 'compare_history', 'done', `${histCount} historical routes`);
+    aiJobs.addFinding(jobId, `Compared with ${histCount} completed historical runs`);
+  } catch (err) {
+    logger.warn('Enhance pipeline: compare_history failed', { error: err.message });
+    setStep(jobId, 'compare_history', 'done', 'skipped');
+  }
+
   aiJobs.updateProgress(jobId, { step: 'load_locations', label: 'Reviewing service locations…', percent: 20 });
   publishJobProgress(jobId);
 
@@ -219,7 +236,7 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
       model: config.model,
       max_tokens: config.maxTokens,
       system: ANALYZE_STOPS_SYSTEM,
-      messages: [{ role: 'user', content: JSON.stringify({ route: routeHeader, stops: stopsData }) }],
+      messages: [{ role: 'user', content: JSON.stringify({ route: routeHeader, stops: stopsData, historicalInsights }) }],
     }),
     { prompt: ANALYZE_STOPS_SYSTEM, input: { stops: stopsData.length } },
   );
@@ -254,6 +271,7 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
           stops: stopsData,
           nearbyAccounts,
           remainingCapacityGal,
+          historicalInsights,
         }),
       }],
     }),

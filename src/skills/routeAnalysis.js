@@ -7,9 +7,10 @@ class RouteAnalysisSkill extends BaseSkill {
     super({
       name: 'route_analysis',
       description:
-        'Analyze historical completed routes to find patterns. ' +
-        'Returns average stops/distance/time per route, account co-occurrence patterns, ' +
-        'and route frequency data. Only analyzes routes where CompletionStatus__c = "Completed" OR Driver_Completed__c = true.',
+        'Analyze historical completed routes across a DATE RANGE and record type for aggregate patterns. ' +
+        'Returns average stops/distance/time, account co-occurrence, and route frequency. ' +
+        'For comparing ONE current route to past runs with the same route name, use compare_routes instead. ' +
+        'Only analyzes routes where CompletionStatus__c = "Completed" OR Driver_Completed__c = true.',
       inputSchema: {
         type: 'object',
         properties: {

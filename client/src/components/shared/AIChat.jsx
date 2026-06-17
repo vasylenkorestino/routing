@@ -57,16 +57,6 @@ export default function AIChat() {
       totalDistance: route.Total_Distance__c,
       totalTime: route.Total_Time__c,
       stopsCount: stops.length,
-      stops: stops.slice(0, 30).map((s) => ({
-        account: s.Account_Name__c,
-        address: s.Container_Address__c,
-        serviceType: s.ServiceType__c,
-        status: s.Status__c,
-        lastGallons: s.LastGallonsCollected__c,
-        priority: s.Priority__c,
-        isFixed: s.Fixed_point__c,
-        notes: s.Notes__c,
-      })),
     };
   }, [route, selectedCount, selectedRoutes, serviceDate, recordType]);
 

@@ -292,6 +292,9 @@ function StepTimeline({ steps, expanded: defaultOpen = false }) {
 function StepRow({ step, defaultOpen }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const hasPayload = step.Prompt__c || step.Input__c || step.Output__c || step.Error_Message__c;
+  const isContinuation = step.Type__c === 'AI Call'
+    && typeof step.Input__c === 'string'
+    && (step.Input__c.startsWith('Tool results from:') || step.Input__c.startsWith('Conversation continuation'));
   return (
     <li className="border border-border/60 rounded bg-surface">
       <button
@@ -319,6 +322,11 @@ function StepRow({ step, defaultOpen }) {
       </button>
       {open && hasPayload && (
         <div className="px-2.5 pb-2 pt-0.5 space-y-1.5 border-t border-border/50">
+          {isContinuation && (
+            <p className="text-[10px] text-txt-secondary italic px-0.5">
+              Input continues via tool results in conversation history.
+            </p>
+          )}
           <JsonBlock label="Prompt" value={step.Prompt__c} />
           <JsonBlock label="Input" value={step.Input__c} />
           <JsonBlock label="Output" value={step.Output__c} />

@@ -1,3 +1,4 @@
-const { createOrchestrator, SYSTEM_PROMPT, TOOL_LABELS } = require('../../services/anthropic');
+const { createOrchestrator, TOOL_LABELS } = require('../../services/anthropic');
+const { composeSystemPrompt } = require('../prompts/composer');
 
-module.exports = { createOrchestrator, SYSTEM_PROMPT, TOOL_LABELS };
+module.exports = { createOrchestrator, composeSystemPrompt, TOOL_LABELS };

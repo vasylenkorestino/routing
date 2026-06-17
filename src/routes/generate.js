@@ -7,6 +7,7 @@ const { plan } = require('../modules/serviceLocationPlanner');
 const generationJobs = require('../services/generationJobs');
 const { publish, EVENT_GENERATION_PROGRESS } = require('../services/notificationBus');
 const sf = require('../services/salesforce');
+const { composeSystemPrompt } = require('../agent/prompts/composer');
 const logger = require('../utils/logger');
 
 /** POST /api/generate-routes — Case 2: generate new routes for a date range. */
@@ -22,7 +23,14 @@ router.post('/', async (req, res, next) => {
 
     logger.info('Generate routes request', { dateRange, recordType });
 
-    const orchestrator = createOrchestrator(skillRegistry.getToolDefinitions(), skillRegistry, recorder);
+    const { staticPrompt, dynamicPrompt } = composeSystemPrompt('generate', {});
+
+    const orchestrator = createOrchestrator(
+      skillRegistry.getToolDefinitions(),
+      skillRegistry,
+      recorder,
+      { staticPrompt, dynamicPrompt, maxIterations: 20 },
+    );
     const prompt = `Generate optimized routes for the date range from ${dateRange.from} to ${dateRange.to || dateRange.from}. ` +
       `Record type: ${recordType || 'EZG'}. ` +
       (serviceLocationId ? `Service location ID: ${serviceLocationId}. ` : '') +
