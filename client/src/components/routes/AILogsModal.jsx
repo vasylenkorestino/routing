@@ -95,7 +95,7 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
   const [expandedComments, setExpandedComments] = useState({});
   const [detailLog, setDetailLog] = useState(null);
   const [detailTab, setDetailTab] = useState('services');
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   const fetchLogs = useCallback(async () => {
     if (!googleRouteId) return;
