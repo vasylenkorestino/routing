@@ -1,6 +1,7 @@
 const BaseSkill = require('./base');
 const sf = require('../services/salesforce');
 const proposals = require('../services/routeEditProposals');
+const { matchStopsByAccountNames } = require('../utils/stopNameMatch');
 const logger = require('../utils/logger');
 
 /**
@@ -33,6 +34,16 @@ class RouteEditProposalSkill extends BaseSkill {
             items: { type: 'string' },
             description: 'Route__c stop Ids to remove from the route.',
           },
+          removeAccountNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Account names to remove — matched against Route__c.Account_Name__c (partial match). Prefer over removeStopIds when user names a stop.',
+          },
+          addAccountNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Account names to add — resolved via Account search when IDs are unknown.',
+          },
           summary: { type: 'string', description: 'Short summary shown to the manager (required).' },
           reason: { type: 'string', description: 'Explanation of why these changes are recommended.' },
         },
@@ -50,6 +61,8 @@ class RouteEditProposalSkill extends BaseSkill {
       driverId,
       addAccountIds = [],
       removeStopIds = [],
+      removeAccountNames = [],
+      addAccountNames = [],
       summary,
       reason,
     } = input;
@@ -58,6 +71,20 @@ class RouteEditProposalSkill extends BaseSkill {
     if (!route) return { error: 'Route not found', googleRouteId };
 
     const stops = route.stops || [];
+
+    const nameResolution = this._resolveStopNames(stops, removeAccountNames);
+    if (nameResolution.error) return nameResolution.error;
+    const resolvedRemoveIds = [
+      ...new Set([...(removeStopIds || []), ...nameResolution.stopIds]),
+    ];
+
+    let resolvedAddIds = [...(addAccountIds || [])];
+    if (addAccountNames?.length) {
+      const addByName = await this._resolveAddAccountNames(addAccountNames, resolvedAddIds);
+      if (addByName.error) return addByName.error;
+      resolvedAddIds = addByName.accountIds;
+    }
+
     const names = await this._resolveNames({
       driverId: driverId !== undefined ? driverId : route.Driver__c,
       prevDriverId: route.Driver__c,
@@ -65,8 +92,8 @@ class RouteEditProposalSkill extends BaseSkill {
       prevStartId: route.Service_Location_Start__c,
       serviceLocationEndId: serviceLocationEndId || route.Service_Location_End__c,
       prevEndId: route.Service_Location_End__c,
-      addAccountIds,
-      removeStopIds,
+      addAccountIds: resolvedAddIds,
+      removeStopIds: resolvedRemoveIds,
       stops,
     });
 
@@ -76,8 +103,8 @@ class RouteEditProposalSkill extends BaseSkill {
       serviceLocationStartId,
       serviceLocationEndId,
       driverId,
-      addAccountIds,
-      removeStopIds,
+      addAccountIds: resolvedAddIds,
+      removeStopIds: resolvedRemoveIds,
       stops,
       names,
     });
@@ -86,7 +113,9 @@ class RouteEditProposalSkill extends BaseSkill {
       return { error: 'No changes detected — proposal must modify at least one field or stop.' };
     }
 
-    const validationError = this._validate({ route, stops, changes, removeStopIds, addAccountIds });
+    const validationError = this._validate({
+      route, stops, changes, removeStopIds: resolvedRemoveIds, addAccountIds: resolvedAddIds,
+    });
     if (validationError) return { error: validationError };
 
     const raw = {
@@ -257,6 +286,62 @@ class RouteEditProposalSkill extends BaseSkill {
       return 'Cannot remove all stops from a route.';
     }
     return null;
+  }
+
+  /** Resolves removeAccountNames to Route__c stop Ids. */
+  _resolveStopNames(stops, removeAccountNames) {
+    if (!removeAccountNames?.length) return { stopIds: [] };
+
+    const { resolved, ambiguous, notFound } = matchStopsByAccountNames(stops, removeAccountNames);
+    if (notFound.length) {
+      return {
+        error: {
+          error: `No stop found matching: ${notFound.join(', ')}`,
+          notFound,
+          availableStops: stops.map((s) => s.Account_Name__c).filter(Boolean),
+        },
+      };
+    }
+    if (ambiguous.length) {
+      return {
+        error: {
+          error: 'Multiple stops match — ask the user to clarify.',
+          ambiguous,
+        },
+      };
+    }
+    return { stopIds: resolved.map((r) => r.stop.Id) };
+  }
+
+  /** Resolves addAccountNames to Account Ids via SOQL name search. */
+  async _resolveAddAccountNames(addAccountNames, existingIds = []) {
+    const accountIds = [...existingIds];
+    const ambiguous = [];
+    const notFound = [];
+
+    for (const rawName of addAccountNames) {
+      const term = String(rawName || '').replace(/'/g, "\\'").trim();
+      if (!term) continue;
+      const rows = await sf.query(
+        `SELECT Id, Name FROM Account WHERE Name LIKE '%${term}%' AND MALatitude__c != null ` +
+        `ORDER BY Name LIMIT 5`,
+      );
+      if (rows.length === 1) {
+        accountIds.push(rows[0].Id);
+      } else if (rows.length > 1) {
+        ambiguous.push({ query: rawName, matches: rows.map((r) => ({ id: r.Id, name: r.Name })) });
+      } else {
+        notFound.push(rawName);
+      }
+    }
+
+    if (notFound.length) {
+      return { error: { error: `Account not found: ${notFound.join(', ')}`, notFound } };
+    }
+    if (ambiguous.length) {
+      return { error: { error: 'Multiple accounts match — ask the user to clarify.', ambiguous } };
+    }
+    return { accountIds: [...new Set(accountIds)] };
   }
 }
 

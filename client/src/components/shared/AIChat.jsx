@@ -31,7 +31,7 @@ export default function AIChat() {
   }, []);
 
   const buildContext = useCallback(() => {
-    if (selectedCount > 0) {
+    if (selectedCount > 1) {
       return {
         multiRoute: true,
         serviceDate,
@@ -49,6 +49,22 @@ export default function AIChat() {
             serviceLocationEnd: r.Service_Location_End__c,
           };
         }),
+      };
+    }
+    if (selectedCount === 1) {
+      const r = selectedRoutes[0];
+      const stops = r.Routes__r?.records ?? r.Routes__r ?? r.points ?? [];
+      return {
+        routeId: r.Id ?? r.id,
+        routeName: r.Name,
+        serviceDate: r.Service_Date__c ?? serviceDate,
+        driver: r.DriverName__c,
+        totalDistance: r.Total_Distance__c,
+        totalTime: r.Total_Time__c,
+        stopsCount: stops.length,
+        serviceLocationStart: r.Service_Location_Start__c,
+        serviceLocationEnd: r.Service_Location_End__c,
+        recordType,
       };
     }
     if (!route) return undefined;
@@ -90,9 +106,6 @@ export default function AIChat() {
         refreshAfterAiCreate(createdRoutes).then((route) => {
           if (route) toast.success(`Route "${route.Name}" is ready.`);
         });
-      }
-      if (editProposals.length > 0) {
-        toast.info('Review the proposed changes below and approve or decline.');
       }
       setGenerating(false);
       setActivePlaceholderIdx(null);

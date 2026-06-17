@@ -10,6 +10,7 @@ const TOOL_LABELS = {
   route_enhancement: 'Enhancing route',
   route_generation: 'Generating routes',
   route_edit_proposal: 'Proposing route edits',
+  route_stops: 'Loading route stops',
   route_parameters: 'Loading route parameters',
   geo_utils: 'Running geo calculations',
   route_logger: 'Logging decisions',

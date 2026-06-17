@@ -8,17 +8,30 @@ const { publishJobProgress } = require('../services/aiJobPublisher');
 const sessionStore = require('../agent/memory/sessionStore');
 const { buildMemoryContext } = require('../agent/memory/recall');
 const { composeSystemPrompt } = require('../agent/prompts/composer');
-const { isRouteEditIntent, runRouteEditPrefetch } = require('../agent/workflows/routeEditPrefetch');
+const { runRouteEditPrefetch } = require('../agent/workflows/routeEditPrefetch');
+const { classifyChatIntent } = require('../agent/workflows/chatIntent');
 const logger = require('../utils/logger');
 
-/** Task-specific tool subsets and iteration caps for chat. */
+/** Task-specific tool subsets — chosen by classifyChatIntent(). */
 const TASK_MODES = {
-  route_edit: {
-    toolNames: ['compare_routes', 'route_enhancement', 'account_discovery', 'geo_utils', 'route_edit_proposal', 'route_logger'],
+  route_edit_simple: {
+    toolNames: ['route_edit_proposal', 'route_stops'],
+    maxIterations: 2,
+  },
+  route_edit_plan: {
+    toolNames: ['route_enhancement', 'compare_routes', 'route_edit_proposal', 'route_stops'],
+    maxIterations: 3,
+  },
+  route_redesign: {
+    toolNames: ['route_enhancement', 'compare_routes', 'account_discovery', 'route_generation', 'route_edit_proposal', 'route_stops'],
     maxIterations: 4,
   },
+  route_edit: {
+    toolNames: ['route_enhancement', 'compare_routes', 'route_edit_proposal', 'route_stops', 'route_logger'],
+    maxIterations: 3,
+  },
   qa: {
-    toolNames: ['route_enhancement', 'salesforce_query', 'agent_memory'],
+    toolNames: ['route_stops', 'route_enhancement', 'salesforce_query', 'agent_memory'],
     maxIterations: 2,
   },
   multi_route: {
@@ -26,8 +39,8 @@ const TASK_MODES = {
     maxIterations: 4,
   },
   general: {
-    toolNames: ['route_enhancement', 'compare_routes', 'salesforce_query', 'agent_memory'],
-    maxIterations: 4,
+    toolNames: ['route_stops', 'route_enhancement', 'salesforce_query', 'agent_memory'],
+    maxIterations: 3,
   },
   full: {
     toolNames: null,
@@ -35,19 +48,11 @@ const TASK_MODES = {
   },
 };
 
-/** Resolves chat task mode from message and context. */
-function resolveChatMode(message, context) {
-  if (context?.multiRoute) return 'multi_route';
-  if (!context?.routeId) return 'qa';
-  if (isRouteEditIntent(message, context)) return 'route_edit';
-  return 'general';
-}
-
-/** Builds slim route pointer block (no inline stop list). */
-function buildContextPrompt(context, recordType) {
+/** Builds intent-specific context instructions (minimal data loading). */
+function buildContextPrompt(context, recordType, intent) {
   if (!context) return '';
 
-  if (context.multiRoute && Array.isArray(context.routes) && context.routes.length > 0) {
+  if (context.multiRoute && Array.isArray(context.routes) && context.routes.length > 1) {
     const parts = ['\n\n--- SELECTED ROUTES (MULTI-ROUTE REDESIGN) ---'];
     if (context.serviceDate) parts.push(`Date: ${context.serviceDate}`);
     if (recordType || context.recordType) parts.push(`Record Type: ${recordType || context.recordType}`);
@@ -57,24 +62,13 @@ function buildContextPrompt(context, recordType) {
       parts.push(
         `  ${i + 1}. "${r.routeName || '—'}" (${r.routeId})` +
         ` | Driver: ${r.driver || '—'}` +
-        ` | Stops: ${r.stopsCount ?? 0}` +
-        ` | Distance: ${r.totalDistance || '—'}` +
-        ` | Time: ${r.totalTime || '—'}` +
-        (r.serviceLocationStart ? ` | Start yard: ${r.serviceLocationStart}` : '') +
-        (r.serviceLocationEnd ? ` | End yard: ${r.serviceLocationEnd}` : ''),
+        ` | Stops: ${r.stopsCount ?? 0}`,
       );
     });
     const idList = context.routes.map((r) => r.routeId).filter(Boolean);
     parts.push('');
-    parts.push('INSTRUCTIONS:');
-    parts.push('The user wants you to redesign the routes above.');
-    parts.push(`1. Call multi_route_context with routeIds=${JSON.stringify(idList)} to load stops, accounts, service history, and open UCO tickets.`);
-    parts.push('2. Optionally call account_discovery for the same date and record type to widen the candidate pool.');
-    parts.push('3. Apply routing rules to group accounts into NEW optimized routes.');
-    parts.push('4. Call route_generation to create Google_Route__c + Route__c records (isAI__c = true, isInherit__c = true, isAIApproved__c = false).');
-    parts.push('   Each route MUST set serviceLocationStartId and serviceLocationEndId (Service_Location_Start__c / Service_Location_End__c).');
-    parts.push('   Copy yards from multi_route_context or the selected routes above; pass sourceRouteId when rebuilding a single route.');
-    parts.push('5. Reply with a short summary — do not list every stop.');
+    parts.push('INSTRUCTIONS: Multi-route redesign only — call multi_route_context, then route_generation for NEW routes.');
+    parts.push(`routeIds=${JSON.stringify(idList)}`);
     parts.push('--- END CONTEXT ---\n');
     return parts.join('\n');
   }
@@ -85,12 +79,24 @@ function buildContextPrompt(context, recordType) {
   if (context.driver) parts.push(`Driver: ${context.driver}`);
   if (recordType) parts.push(`Record Type: ${recordType}`);
   parts.push(`Stops: ${context.stopsCount ?? 0}`);
-  if (context.serviceLocationStart) parts.push(`Start yard (Service_Location_Start__c): ${context.serviceLocationStart}`);
-  if (context.serviceLocationEnd) parts.push(`End yard (Service_Location_End__c): ${context.serviceLocationEnd}`);
-  parts.push('Instruction: Call compare_routes and route_enhancement to load stop/account details and historical diff before making changes.');
-  parts.push('To MODIFY this existing route (date, driver, yards, add/remove stops), call route_edit_proposal — never route_generation.');
-  parts.push('route_edit_proposal creates a pending change set; the manager must approve in chat before anything is applied.');
-  parts.push('Use route_generation ONLY if the user explicitly wants a brand-new separate route.');
+
+  if (intent?.tier === 'question') {
+    parts.push('Intent: QUESTION — answer briefly. Use route_stops only if you need stop names/IDs.');
+    parts.push('Do NOT call route_edit_proposal or compare_routes unless the user asks to apply a change.');
+  } else if (intent?.tier === 'actionable') {
+    parts.push('Intent: ACTIONABLE EDIT — call route_edit_proposal directly.');
+    parts.push('Use removeAccountNames / addAccountNames when the user names stops by name (matched on Account_Name__c).');
+    parts.push('Do NOT call compare_routes, multi_route_context, or account_discovery for simple add/remove/assign requests.');
+    parts.push('route_edit_proposal shows a manager approval card — only call it when applying a change.');
+  } else if (intent?.tier === 'exploratory') {
+    parts.push('Intent: EXPLORATORY — recommend options first; call route_edit_proposal only if user confirms.');
+    parts.push('May use route_enhancement and compare_routes for history-aware suggestions.');
+  } else if (intent?.tier === 'redesign') {
+    parts.push('Intent: REDESIGN — may use compare_routes and route_enhancement before route_generation or route_edit_proposal.');
+  } else {
+    parts.push('Answer concisely. Load only the data needed for this request.');
+  }
+
   parts.push('--- END CONTEXT ---\n');
   return parts.join('\n');
 }
@@ -107,20 +113,20 @@ function initChatSteps(jobId) {
   }
 }
 
-const GENERATION_INTENT = /\b(create|generate|apply|save|build|make)\b/i;
-
-/** Runs chat with prefetch fast-path or full orchestrator. */
+/** Runs chat with optional exploratory prefetch or full orchestrator. */
 async function runChatOrchestrator({ message, recordType, context, sessionId, jobId, recorder, onProgress, executionContext }) {
+  const intent = classifyChatIntent(message, context);
   const memoryBlock = await buildMemoryContext({ context, recordType });
   const { staticPrompt, dynamicPrompt } = composeSystemPrompt('chat', { memoryBlock });
   const priorMessages = sessionId ? sessionStore.getMessages(sessionId) : [];
-  const contextPrompt = buildContextPrompt(context, recordType);
+  const contextPrompt = buildContextPrompt(context, recordType, intent);
   const fullUserMessage = message + contextPrompt;
-  const mode = resolveChatMode(message, context);
-  const modeConfig = TASK_MODES[mode] || TASK_MODES.full;
+  const modeConfig = TASK_MODES[intent.mode] || TASK_MODES.full;
 
-  if (isRouteEditIntent(message, context) && !GENERATION_INTENT.test(message)) {
-    logger.info('[chat] route-edit prefetch path', { routeId: context.routeId });
+  logger.info('[chat] intent', { mode: intent.mode, tier: intent.tier, routeId: intent.routeId });
+
+  if (intent.usePrefetch) {
+    logger.info('[chat] exploratory prefetch path', { routeId: context?.routeId });
     return runRouteEditPrefetch({
       message: fullUserMessage,
       context,
@@ -166,8 +172,6 @@ async function runChatJob(jobId, body) {
   publishJobProgress(jobId);
 
   const recorder = createRecorder({ onStep: () => publishJobProgress(jobId) });
-  const memoryBlock = await buildMemoryContext({ context, recordType });
-  const { staticPrompt, dynamicPrompt } = composeSystemPrompt('chat', { memoryBlock });
 
   const onProgress = ({ phase, label, toolName, detail, iteration }) => {
     if (phase === 'tool' && toolName) {
@@ -205,7 +209,8 @@ async function runChatJob(jobId, body) {
     aiJobs.mergePartialResults(jobId, { editProposals: result.editProposals });
   }
 
-  return { result, recorder, fullUserMessage: message + buildContextPrompt(context, recordType), systemPrompt: { staticPrompt, dynamicPrompt } };
+  const { staticPrompt, dynamicPrompt } = composeSystemPrompt('chat', { memoryBlock: await buildMemoryContext({ context, recordType }) });
+  return { result, recorder, fullUserMessage: message + buildContextPrompt(context, recordType, classifyChatIntent(message, context)), systemPrompt: { staticPrompt, dynamicPrompt } };
 }
 
 /** POST /api/chat — general-purpose chat with route context */

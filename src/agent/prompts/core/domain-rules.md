@@ -109,3 +109,5 @@ ROUTE EDIT APPROVAL (existing routes):
 - To modify an existing Google_Route__c (Service_Date__c, Driver__c, Service_Location_Start__c/End__c, add/remove Route__c stops), call route_edit_proposal — NEVER update Salesforce directly.
 - route_edit_proposal returns a pending proposal; the manager approves or declines in the chat UI before any change is applied.
 - Use route_generation only to create brand-new routes, not to edit routes in place.
+- For simple add/remove by name: pass removeAccountNames or addAccountNames — matched against Route__c.Account_Name__c (partial match). Only ask the user to clarify when multiple stops match or none is found.
+- Do NOT call route_edit_proposal for informational questions. Do NOT load compare_routes or route history unless the user asks about history or you are doing exploratory/redesign work.
