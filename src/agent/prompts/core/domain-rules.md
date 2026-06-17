@@ -104,3 +104,8 @@ CORE DECISION LOGIC (per account):
 4. Is it close enough to include on today's route?
 5. Does it have a fixed contract, VIP status, or sensor data?
 Then: select qualifying accounts → group geographically → build routes within truck/driver limits → maximize stops-per-mile.
+
+ROUTE EDIT APPROVAL (existing routes):
+- To modify an existing Google_Route__c (Service_Date__c, Driver__c, Service_Location_Start__c/End__c, add/remove Route__c stops), call route_edit_proposal — NEVER update Salesforce directly.
+- route_edit_proposal returns a pending proposal; the manager approves or declines in the chat UI before any change is applied.
+- Use route_generation only to create brand-new routes, not to edit routes in place.

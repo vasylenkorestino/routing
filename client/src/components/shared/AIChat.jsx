@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import useStore from '../../store';
 import { chatAsync } from '../../api/routing';
 import AIProgressSteps from './AIProgressSteps';
+import AIEditProposalCard from './AIEditProposalCard';
 import { toast } from '../ui/Toast';
 
 /** Collapsible AI chat panel with async progress and live placeholder messages. */
@@ -74,15 +75,24 @@ export default function AIChat() {
       content: aiJobStatus === 'complete' && aiJobMessage
         ? aiJobMessage
         : undefined,
+      editProposals: aiJobStatus === 'complete'
+        ? (useStore.getState().aiJobResult?.editProposals
+          || useStore.getState().aiJobPartialResults?.editProposals
+          || [])
+        : undefined,
       isPlaceholder: aiJobStatus !== 'complete',
     });
     if (aiJobStatus === 'complete') {
       const { aiJobResult, aiJobPartialResults } = useStore.getState();
       const createdRoutes = aiJobResult?.createdRoutes || aiJobPartialResults?.createdRoutes || [];
+      const editProposals = aiJobResult?.editProposals || aiJobPartialResults?.editProposals || [];
       if (createdRoutes.length > 0) {
         refreshAfterAiCreate(createdRoutes).then((route) => {
           if (route) toast.success(`Route "${route.Name}" is ready.`);
         });
+      }
+      if (editProposals.length > 0) {
+        toast.info('Review the proposed changes below and approve or decline.');
       }
       setGenerating(false);
       setActivePlaceholderIdx(null);
@@ -150,11 +160,11 @@ export default function AIChat() {
         {chatMessages.map((m, i) => (
           <div
             key={i}
-            className={`max-w-[85%] px-3 py-2 rounded-xl text-[13px] leading-relaxed break-words ${
+            className={`${
               m.role === 'user'
-                ? 'self-end bg-primary text-white rounded-br-sm whitespace-pre-wrap'
-                : 'self-start bg-bg text-txt rounded-bl-sm'
-            }`}
+                ? 'max-w-[85%] self-end bg-primary text-white rounded-br-sm whitespace-pre-wrap'
+                : `self-start bg-bg text-txt rounded-bl-sm ${m.editProposals?.length ? 'max-w-[95%] w-full' : 'max-w-[85%]'}`
+            } px-3 py-2 rounded-xl text-[13px] leading-relaxed break-words`}
           >
             {m.isPlaceholder ? (
               <AIProgressSteps
@@ -165,7 +175,12 @@ export default function AIChat() {
                 status={isGenerating ? 'running' : 'complete'}
               />
             ) : (
-              <span className="whitespace-pre-wrap">{m.content}</span>
+              <div className="space-y-2">
+                {m.content && <span className="whitespace-pre-wrap">{m.content}</span>}
+                {m.editProposals?.map((p) => (
+                  <AIEditProposalCard key={p.proposalId} proposal={p} />
+                ))}
+              </div>
             )}
           </div>
         ))}

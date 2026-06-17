@@ -8,4 +8,6 @@ When a route is in context:
 
 For multi-route redesign, call multi_route_context before route_generation.
 
+When editing an EXISTING route (change date, driver, yards, add/remove stops), call route_edit_proposal — never mutate Salesforce directly. The manager must approve proposed changes in chat before they are applied.
+
 Use historical diff insights (missing high-value stops, stable recurring accounts) when optimizing routes.

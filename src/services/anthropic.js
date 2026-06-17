@@ -9,6 +9,7 @@ const TOOL_LABELS = {
   account_discovery: 'Discovering accounts',
   route_enhancement: 'Enhancing route',
   route_generation: 'Generating routes',
+  route_edit_proposal: 'Proposing route edits',
   route_parameters: 'Loading route parameters',
   geo_utils: 'Running geo calculations',
   route_logger: 'Logging decisions',
@@ -181,6 +182,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
   const { staticPrompt, dynamicPrompt } = resolvePrompts(options);
   const priorMessages = options.priorMessages || [];
   const maxIterations = options.maxIterations ?? 20;
+  const executionContext = options.executionContext || {};
 
   const allTools = toolDefinitions;
   const filteredTools = options.toolNames?.length
@@ -206,6 +208,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
       let iterations = 0;
       let lastToolNames = [];
       const createdRoutes = [];
+      const editProposals = [];
 
       emit({ phase: 'thinking', iteration: 0, label: 'Understanding your request…' });
 
@@ -290,9 +293,12 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
             let result;
             let toolError = null;
             try {
-              result = await skillRegistry.execute(toolUse.name, toolUse.input);
+              result = await skillRegistry.execute(toolUse.name, toolUse.input, executionContext);
               if (toolUse.name === 'route_generation' && Array.isArray(result?.googleRoutes)) {
                 createdRoutes.push(...result.googleRoutes);
+              }
+              if (toolUse.name === 'route_edit_proposal' && result?.proposalId) {
+                editProposals.push(result);
               }
             } catch (err) {
               logger.error(`Tool ${toolUse.name} failed`, { error: err.message });
@@ -331,6 +337,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
         iterations,
         toolCallsExecuted: messages.filter((m) => m.role === 'user' && Array.isArray(m.content)).length,
         createdRoutes,
+        editProposals,
         steps: recorder ? recorder.steps : [],
       };
     },

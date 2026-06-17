@@ -38,6 +38,7 @@ app.use('/api/ai-jobs', aiJobRoutes);
 app.use('/api/enhance-route', enhanceRoutes);
 app.use('/api/generate-routes', generateRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/route-edit', require('./routes/routeEdit'));
 app.use('/api/routing', routingRoutes);
 app.use('/api/admin', adminRoutes);
 

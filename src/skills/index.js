@@ -10,6 +10,7 @@ const AccountRouteHistorySkill = require('./accountRouteHistory');
 const MultiRouteContextSkill = require('./multiRouteContext');
 const CompareRoutesSkill = require('./compareRoutes');
 const AgentMemorySkill = require('./memory/agentMemory');
+const RouteEditProposalSkill = require('./routeEditProposal');
 
 /** Central skill registry. Loads all skills and provides lookup by name. */
 class SkillRegistry {
@@ -32,6 +33,7 @@ class SkillRegistry {
       new MultiRouteContextSkill(),
       new CompareRoutesSkill(),
       new AgentMemorySkill(),
+      new RouteEditProposalSkill(),
     ];
     for (const skill of defaults) {
       this.register(skill);
@@ -53,11 +55,11 @@ class SkillRegistry {
     return all.filter((s) => toolNames.includes(s.name)).map((s) => s.toToolDefinition());
   }
 
-  /** Executes a skill by name with the given params. */
-  async execute(name, params) {
+  /** Executes a skill by name with the given params and optional execution context. */
+  async execute(name, params, context) {
     const skill = this.skills.get(name);
     if (!skill) throw new Error(`Unknown skill: ${name}`);
-    return skill.execute(params);
+    return skill.execute(params, context);
   }
 }
 

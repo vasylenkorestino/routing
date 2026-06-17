@@ -67,3 +67,8 @@ export const generateRoutes = (body) => client.post('/generate-routes', body).th
 export const generateRoutesByLocation = (body) => client.post('/generate-routes/by-location', body).then((r) => r.data);
 export const getGenerationJob = (id) => client.get(`/generate-routes/jobs/${id}`).then((r) => r.data);
 export const commitGeneratedRoutes = (id, body) => client.post(`/generate-routes/jobs/${id}/commit`, body).then((r) => r.data);
+
+/* ── AI route edit proposals (manager approval) ──────────── */
+export const getRouteEditProposal = (id) => client.get(`/route-edit/proposals/${id}`).then((r) => r.data);
+export const approveRouteEditProposal = (id) => client.post(`/route-edit/proposals/${id}/approve`).then((r) => r.data);
+export const declineRouteEditProposal = (id) => client.post(`/route-edit/proposals/${id}/decline`).then((r) => r.data);

@@ -14,8 +14,8 @@ const logger = require('../utils/logger');
 /** Task-specific tool subsets and iteration caps for chat. */
 const TASK_MODES = {
   route_edit: {
-    toolNames: ['compare_routes', 'route_enhancement', 'account_discovery', 'geo_utils', 'route_generation', 'route_logger'],
-    maxIterations: 3,
+    toolNames: ['compare_routes', 'route_enhancement', 'account_discovery', 'geo_utils', 'route_edit_proposal', 'route_logger'],
+    maxIterations: 4,
   },
   qa: {
     toolNames: ['route_enhancement', 'salesforce_query', 'agent_memory'],
@@ -88,7 +88,9 @@ function buildContextPrompt(context, recordType) {
   if (context.serviceLocationStart) parts.push(`Start yard (Service_Location_Start__c): ${context.serviceLocationStart}`);
   if (context.serviceLocationEnd) parts.push(`End yard (Service_Location_End__c): ${context.serviceLocationEnd}`);
   parts.push('Instruction: Call compare_routes and route_enhancement to load stop/account details and historical diff before making changes.');
-  parts.push('When calling route_generation, set serviceLocationStartId/serviceLocationEndId from the yards above (or pass sourceRouteId).');
+  parts.push('To MODIFY this existing route (date, driver, yards, add/remove stops), call route_edit_proposal — never route_generation.');
+  parts.push('route_edit_proposal creates a pending change set; the manager must approve in chat before anything is applied.');
+  parts.push('Use route_generation ONLY if the user explicitly wants a brand-new separate route.');
   parts.push('--- END CONTEXT ---\n');
   return parts.join('\n');
 }
@@ -108,7 +110,7 @@ function initChatSteps(jobId) {
 const GENERATION_INTENT = /\b(create|generate|apply|save|build|make)\b/i;
 
 /** Runs chat with prefetch fast-path or full orchestrator. */
-async function runChatOrchestrator({ message, recordType, context, sessionId, jobId, recorder, onProgress }) {
+async function runChatOrchestrator({ message, recordType, context, sessionId, jobId, recorder, onProgress, executionContext }) {
   const memoryBlock = await buildMemoryContext({ context, recordType });
   const { staticPrompt, dynamicPrompt } = composeSystemPrompt('chat', { memoryBlock });
   const priorMessages = sessionId ? sessionStore.getMessages(sessionId) : [];
@@ -141,6 +143,7 @@ async function runChatOrchestrator({ message, recordType, context, sessionId, jo
       priorMessages,
       maxIterations: modeConfig.maxIterations,
       onProgress,
+      executionContext,
     },
   );
 
@@ -177,6 +180,9 @@ async function runChatJob(jobId, body) {
     publishJobProgress(jobId);
   };
 
+  const job = aiJobs.get(jobId);
+  const executionContext = { owner: job?.owner, jobId };
+
   const result = await runChatOrchestrator({
     message,
     recordType,
@@ -185,6 +191,7 @@ async function runChatJob(jobId, body) {
     jobId,
     recorder,
     onProgress,
+    executionContext,
   });
 
   aiJobs.upsertStep(jobId, { id: 'process', label: 'Processing', status: 'done' });
@@ -193,6 +200,9 @@ async function runChatJob(jobId, body) {
   if (sessionId) sessionStore.append(sessionId, { role: 'assistant', content: result.message });
   if (Array.isArray(result.createdRoutes) && result.createdRoutes.length > 0) {
     aiJobs.mergePartialResults(jobId, { createdRoutes: result.createdRoutes });
+  }
+  if (Array.isArray(result.editProposals) && result.editProposals.length > 0) {
+    aiJobs.mergePartialResults(jobId, { editProposals: result.editProposals });
   }
 
   return { result, recorder, fullUserMessage: message + buildContextPrompt(context, recordType), systemPrompt: { staticPrompt, dynamicPrompt } };
@@ -216,6 +226,7 @@ router.post('/', async (req, res, next) => {
       context,
       sessionId,
       recorder,
+      executionContext: { owner: aiJobs.resolveOwner(req) },
     });
 
     if (sessionId) sessionStore.append(sessionId, { role: 'assistant', content: result.message });
