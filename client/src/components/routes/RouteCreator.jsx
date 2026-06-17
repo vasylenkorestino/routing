@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import useStore from '../../store';
 import * as routingApi from '../../api/routing';
 import { OverlaySpinner } from '../ui/Spinner';
@@ -19,6 +19,22 @@ function formatDate(d) {
   if (!d) return '';
   try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
   catch { return d; }
+}
+
+/** Client-side filter over loaded template rows (name, notes, interval, type, dates). */
+function matchesTemplateSearch(template, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    template.Name,
+    template.Notes__c,
+    template.Interval__c,
+    template.StopsCompleted__c,
+    template._type === 'shape' ? 'shape' : 'custom',
+    formatDate(template.Last_Route_Serviced_Date__c),
+    formatDate(template.FutureServiceDate__c),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(q);
 }
 
 /** Modal for creating new routes — choose template or build from scratch */
@@ -43,6 +59,7 @@ export default function RouteCreator() {
   const [fetching, setFetching] = useState(false);
   const [sortKey, setSortKey] = useState('Name');
   const [sortAsc, setSortAsc] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Sync modal fields when opened.
   useEffect(() => {
@@ -51,6 +68,7 @@ export default function RouteCreator() {
     setRecType(recordType);
     setSvcLoc(serviceLocation || '');
     setSelected([]);
+    setSearchQuery('');
   }, [isNew, serviceDate, recordType, serviceLocation]);
 
   // Load inherit templates filtered by service location (Google routes + shapes).
@@ -91,7 +109,9 @@ export default function RouteCreator() {
     else { setSortKey(key); setSortAsc(true); }
   };
 
-  const sorted = [...templates].sort((a, b) => {
+  const sorted = [...templates]
+    .filter((t) => matchesTemplateSearch(t, searchQuery))
+    .sort((a, b) => {
     let av = a[sortKey] ?? '';
     let bv = b[sortKey] ?? '';
     if (typeof av === 'string') av = av.toLowerCase();
@@ -196,6 +216,7 @@ export default function RouteCreator() {
                   onChange={(e) => {
                     setSvcLoc(e.target.value);
                     setSelected([]);
+                    setSearchQuery('');
                   }}
                 >
                   <option value="">All</option>
@@ -205,12 +226,27 @@ export default function RouteCreator() {
             )}
           </div>
 
+          {tab === 'inherit' && (
+            <Field label="Search">
+              <input
+                type="search"
+                className="input-field"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Filter loaded templates by name, notes, interval, type…"
+                disabled={fetching}
+              />
+            </Field>
+          )}
+
           {tab === 'inherit' ? (
             <>
               {fetching ? (
                 <div className="text-sm text-txt-secondary text-center py-8">Loading templates…</div>
               ) : templates.length === 0 ? (
                 <div className="text-sm text-txt-secondary text-center py-8">No templates found</div>
+              ) : sorted.length === 0 ? (
+                <div className="text-sm text-txt-secondary text-center py-8">No templates match your search</div>
               ) : (
                 <div className="border border-border rounded-lg overflow-hidden">
                   {/* Table header */}
@@ -272,6 +308,11 @@ export default function RouteCreator() {
               )}
               {selected.length > 0 && (
                 <div className="text-xs text-primary font-medium">{selected.length} template{selected.length > 1 ? 's' : ''} selected</div>
+              )}
+              {!fetching && templates.length > 0 && searchQuery.trim() && (
+                <div className="text-xs text-txt-secondary">
+                  Showing {sorted.length} of {templates.length} loaded template{templates.length !== 1 ? 's' : ''}
+                </div>
               )}
             </>
           ) : (
