@@ -12,17 +12,16 @@ import logoUrl from '../../assets/eazygrease-logo.png';
 
 const ICON_BTN = 'h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition';
 
-/** Brand logo shown on the far-left of the header. Transparent PNG on the white
- *  toolbar; scaled up slightly via transform so it reads larger without growing
- *  its layout box. */
+/** Brand logo on the far-left of the header; scaled up slightly so it reads
+ *  larger without growing its layout box. */
 function Logo() {
   return (
-    <span className="inline-flex items-center shrink-0 overflow-visible pr-1.5">
+    <span className="inline-flex items-center shrink-0 overflow-visible pr-1">
       <img
         src={logoUrl}
         alt="Eazy Grease"
         draggable={false}
-        className="h-7 md:h-8 w-auto object-contain select-none origin-left scale-125 md:scale-110 transition-transform"
+        className="h-7 md:h-8 w-auto max-w-[88px] md:max-w-[104px] object-contain select-none origin-left scale-110 md:scale-105 transition-transform"
       />
     </span>
   );
