@@ -24,6 +24,7 @@ import GenerationProgressPanel from '../components/shared/GenerationProgressPane
 import GeneratedRoutesReview from '../components/shared/GeneratedRoutesReview';
 import Spinner from '../components/ui/Spinner';
 import useNotificationStream from '../hooks/useNotificationStream';
+import { useIsMobile } from '../hooks/useMediaQuery';
 
 function RightPanel() {
   const route = useStore((s) => s.route);
@@ -165,6 +166,45 @@ function ChatBar({ isChatOpen, toggleChat }) {
   );
 }
 
+/**
+ * Mobile shell — shows one full-width panel at a time (Map or Route) with a
+ * bottom tab bar. Both panels stay mounted (toggled via opacity, not unmounted)
+ * so the map keeps its tiles and the details panel keeps its scroll/state.
+ */
+function MobileShell({ map, details }) {
+  const [tab, setTab] = useState('route');
+  const tabs = [
+    { k: 'route', label: 'Route', d: 'M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5' },
+    { k: 'map', label: 'Map', d: 'M9 6.75V15m6-6v8.25m.503 3.498l4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z' },
+  ];
+  return (
+    <>
+      <div className="flex-1 overflow-hidden relative">
+        <div className="absolute inset-0" style={{ opacity: tab === 'map' ? 1 : 0, pointerEvents: tab === 'map' ? 'auto' : 'none', zIndex: tab === 'map' ? 2 : 1 }}>
+          {map}
+        </div>
+        <div className="absolute inset-0 overflow-auto" style={{ opacity: tab === 'route' ? 1 : 0, pointerEvents: tab === 'route' ? 'auto' : 'none', zIndex: tab === 'route' ? 2 : 1 }}>
+          {details}
+        </div>
+      </div>
+      <nav className="shrink-0 flex border-t border-border bg-surface">
+        {tabs.map((t) => (
+          <button
+            key={t.k}
+            onClick={() => setTab(t.k)}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium transition ${tab === t.k ? 'text-primary' : 'text-txt-secondary'}`}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d={t.d} />
+            </svg>
+            {t.label}
+          </button>
+        ))}
+      </nav>
+    </>
+  );
+}
+
 export default function RoutingPage() {
   const loadRoutingData = useStore((s) => s.loadRoutingData);
   const skipNextAutoLoad = useStore((s) => s.skipNextAutoLoad);
@@ -190,21 +230,29 @@ export default function RoutingPage() {
 
   useNotificationStream();
 
+  const isMobile = useIsMobile();
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-bg">
       <Header />
 
       <GenerationProgressPanel />
 
-      <div className="flex-1 overflow-hidden">
-        <SplitPanel
-          leftPanel={<RoutingMap />}
-          rightPanel={<RightPanel />}
-        />
-      </div>
+      {isMobile ? (
+        <MobileShell map={<RoutingMap />} details={<RightPanel />} />
+      ) : (
+        <>
+          <div className="flex-1 overflow-hidden">
+            <SplitPanel
+              leftPanel={<RoutingMap />}
+              rightPanel={<RightPanel />}
+            />
+          </div>
 
-      {/* AI Chat bottom bar — resizable by dragging top edge */}
-      <ChatBar isChatOpen={isChatOpen} toggleChat={toggleChat} />
+          {/* AI Chat bottom bar — resizable by dragging top edge */}
+          <ChatBar isChatOpen={isChatOpen} toggleChat={toggleChat} />
+        </>
+      )}
 
       {/* Modals */}
       {isNew && <RouteCreator />}

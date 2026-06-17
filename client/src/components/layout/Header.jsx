@@ -53,9 +53,9 @@ export default function Header() {
   ];
 
   return (
-    <header className="flex items-center gap-2 px-3 py-1.5 bg-surface border-b border-border shrink-0 h-12 z-10">
+    <header className="flex flex-wrap md:flex-nowrap items-center gap-2 px-3 py-1.5 bg-surface border-b border-border shrink-0 min-h-12 md:h-12 z-10">
       {/* Filters */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 overflow-x-auto max-w-full">
         <DatePicker value={serviceDate} onChange={setServiceDate} />
         <Select
           value={recordType}
@@ -124,8 +124,8 @@ export default function Header() {
 
       <div className="flex-1" />
 
-      {/* Layout toggle */}
-      <div className="inline-flex rounded-lg border border-border overflow-hidden">
+      {/* Layout toggle — desktop only (mobile uses the bottom tab bar) */}
+      <div className="hidden md:inline-flex rounded-lg border border-border overflow-hidden">
         {Object.entries(modeIcons).map(([mode, icon]) => (
           <button
             key={mode}

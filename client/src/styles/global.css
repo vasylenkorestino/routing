@@ -26,6 +26,11 @@ html, body, #root {
   @apply h-full w-full;
 }
 
+/* Slightly smaller global scale so more fits on screen without feeling crowded.
+   rem-based Tailwind spacing/typography scale from this root size. */
+html { font-size: 15px; }
+@media (max-width: 767px) { html { font-size: 14px; } }
+
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 
