@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Marker } from '@react-google-maps/api';
 import { useGoogleMap } from '@react-google-maps/api';
 import useStore from '../../store';
@@ -270,22 +270,83 @@ function SingleRoute({ route, onSelectStop, forceVisible = false }) {
   );
 }
 
+const stopAcctId = (s) => s.AccountId__c || s.Account__c || null;
+
 /**
- * Compare overlay — renders the comparison route on top of the current one,
- * always visible and in its own contrasting colour, with an independent
- * stop info window.
+ * Marker drawn on top of stops shared across 2+ selected routes so overlaps
+ * are immediately obvious. Shows the number of routes containing the account.
+ */
+function SharedStopMarker({ position, count, title, onClick }) {
+  return (
+    <Marker
+      position={position}
+      zIndex={9999}
+      onClick={onClick}
+      title={title}
+      label={{ text: `×${count}`, color: '#fff', fontSize: '10px', fontWeight: '800' }}
+      icon={{
+        path: window.google?.maps?.SymbolPath?.CIRCLE ?? 0,
+        scale: 12,
+        fillColor: '#111827',
+        fillOpacity: 1,
+        strokeColor: '#fff',
+        strokeWeight: 3,
+      }}
+    />
+  );
+}
+
+/**
+ * Compare overlay — renders every comparison route on top of the current one
+ * (each in its own colour) plus a shared-stop layer highlighting accounts that
+ * appear in multiple selected routes. Clicking any stop opens Last Services.
  */
 export function CompareRouteLayer() {
-  const compareRoute = useStore((s) => s.compareRoute);
+  const route = useStore((s) => s.route);
+  const compareRoutes = useStore((s) => s.compareRoutes);
+  const setCompareDetail = useStore((s) => s.setCompareDetail);
   const [selectedStop, setSelectedStop] = useState(null);
-  const handleClose = useCallback(() => setSelectedStop(null), []);
 
-  if (!compareRoute) return null;
+  const selectStop = useCallback((stop) => {
+    setSelectedStop(stop);
+    setCompareDetail({ accountId: stopAcctId(stop), accountName: stop.Account_Name__c || stop.Name || '' });
+  }, [setCompareDetail]);
+
+  // Accounts shared across 2+ of the selected routes (current + comparisons).
+  const shared = useMemo(() => {
+    const all = [route, ...compareRoutes].filter(Boolean);
+    const byAcct = new Map();
+    all.forEach((r) => {
+      const stops = r?.Routes__r?.records ?? r?.Routes__r ?? [];
+      stops.forEach((s) => {
+        const id = stopAcctId(s);
+        if (!id || !hasValidCoords(s)) return;
+        if (!byAcct.has(id)) {
+          byAcct.set(id, { id, name: s.Account_Name__c || s.Name || id, lat: Number(s.Latitude__c), lng: Number(s.Longitude__c), routes: new Set() });
+        }
+        byAcct.get(id).routes.add(r.Id ?? r.id ?? r.Name);
+      });
+    });
+    return [...byAcct.values()].filter((a) => a.routes.size >= 2);
+  }, [route, compareRoutes]);
 
   return (
     <>
-      <SingleRoute route={compareRoute} onSelectStop={setSelectedStop} forceVisible />
-      {selectedStop && <StopInfoWindow stop={selectedStop} onClose={handleClose} />}
+      {compareRoutes.map((r) => (
+        <SingleRoute key={r.Id ?? r.id} route={r} onSelectStop={selectStop} forceVisible />
+      ))}
+
+      {shared.map((a) => (
+        <SharedStopMarker
+          key={a.id}
+          position={{ lat: a.lat, lng: a.lng }}
+          count={a.routes.size}
+          title={`${a.name} — appears in ${a.routes.size} routes`}
+          onClick={() => setCompareDetail({ accountId: a.id, accountName: a.name })}
+        />
+      ))}
+
+      {selectedStop && <StopInfoWindow stop={selectedStop} onClose={() => setSelectedStop(null)} />}
     </>
   );
 }
@@ -293,8 +354,15 @@ export function CompareRouteLayer() {
 /** Renders all routes — polylines use native Google Maps API for reliable hide/show */
 export default function RouteLayer() {
   const routes = useStore((s) => s.layers.routes.data);
+  const compareMode = useStore((s) => s.compareMode);
+  const setCompareDetail = useStore((s) => s.setCompareDetail);
   const [selectedStop, setSelectedStop] = useState(null);
   const handleClose = useCallback(() => setSelectedStop(null), []);
+
+  const handleSelect = useCallback((stop) => {
+    setSelectedStop(stop);
+    if (compareMode) setCompareDetail({ accountId: stopAcctId(stop), accountName: stop.Account_Name__c || stop.Name || '' });
+  }, [compareMode, setCompareDetail]);
 
   return (
     <>
@@ -302,7 +370,7 @@ export default function RouteLayer() {
         <SingleRoute
           key={route.Id ?? route.id}
           route={route}
-          onSelectStop={setSelectedStop}
+          onSelectStop={handleSelect}
         />
       ))}
 

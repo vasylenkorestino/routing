@@ -20,16 +20,16 @@ export default function RoutingMap() {
   const mapCenter = useStore((s) => s.mapCenter);
   const mapZoom = useStore((s) => s.mapZoom);
   const route = useStore((s) => s.route);
-  const compareRoute = useStore((s) => s.compareRoute);
+  const compareRoutes = useStore((s) => s.compareRoutes);
   const serviceLocations = useStore((s) => s.serviceLocations);
   const mapRef = useRef(null);
   const [selectedSL, setSelectedSL] = useState(null);
 
   const onLoad = useCallback((map) => { mapRef.current = map; }, []);
 
-  const compareRouteId = compareRoute?.Id ?? compareRoute?.id ?? null;
+  const compareKey = (compareRoutes ?? []).map((r) => r.Id ?? r.id).join(',');
 
-  /** Fit map bounds to the current route (and the comparison route when active) */
+  /** Fit map bounds to the current route plus any selected comparison routes. */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !route || !window.google) return;
@@ -43,7 +43,7 @@ export default function RoutingMap() {
       return [...coords, ...poly];
     };
 
-    const all = [...coordsOf(route), ...(compareRoute ? coordsOf(compareRoute) : [])];
+    const all = [route, ...(compareRoutes ?? [])].flatMap(coordsOf);
     if (all.length === 0) return;
 
     if (all.length === 1) {
@@ -56,7 +56,7 @@ export default function RoutingMap() {
     all.forEach((c) => bounds.extend(c));
     map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route, compareRouteId]);
+  }, [route, compareKey]);
 
   const validSLs = (serviceLocations ?? []).filter((sl) => {
     const lat = Number(sl.Latitude__c);

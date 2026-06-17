@@ -129,7 +129,7 @@ const routingSlice = (set, get) => ({
 
   selectRoute: (routeId) => {
     const route = get().routes.find((r) => (r.Id ?? r.id) === routeId) ?? null;
-    set({ routeId, route, compareMode: false, compareRoute: null });
+    set({ routeId, route, compareMode: false, compareRoutes: [], compareDetail: null });
     if (routeId) {
       const hidden = {};
       get().routes.forEach((r) => {
