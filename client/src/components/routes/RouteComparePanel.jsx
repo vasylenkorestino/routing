@@ -231,8 +231,7 @@ export default function RouteComparePanel() {
         ) : (
           <>
             {/* Single summary table — one row per route, metrics shown once */}
-            <div className="border border-border rounded-lg overflow-hidden">
-              <div className="px-3 py-1.5 bg-bg/50 border-b border-border text-[11px] font-semibold text-txt-secondary uppercase tracking-wide">Summary</div>
+            <Section title="Summary">
               <div className="overflow-auto">
                 <table className="w-full text-[12px]">
                   <thead>
@@ -270,7 +269,7 @@ export default function RouteComparePanel() {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </Section>
 
             {/* Difference sections — side by side */}
             <div className="grid grid-cols-3 gap-3">
@@ -281,11 +280,7 @@ export default function RouteComparePanel() {
 
             {/* Route-specific breakdown */}
             {sections.partial.length > 0 && (
-              <div className="border border-border rounded-lg overflow-hidden">
-                <div className="px-3 py-1.5 bg-bg/50 border-b border-border flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wide">Route-specific differences</span>
-                  <span className="text-[10px] text-txt-secondary tabular-nums">{sections.partial.length}</span>
-                </div>
+              <Section title="Route-specific differences" count={sections.partial.length}>
                 <div className="max-h-64 overflow-auto divide-y divide-border/40">
                   {sections.partial.map((a) => (
                     <div key={a.id} className="flex items-center gap-2 px-3 py-1.5">
@@ -301,7 +296,7 @@ export default function RouteComparePanel() {
                     </div>
                   ))}
                 </div>
-              </div>
+              </Section>
             )}
           </>
         )}
@@ -321,17 +316,33 @@ export default function RouteComparePanel() {
   );
 }
 
-/** A labelled, scrollable list of clickable account names. */
-function AccountSection({ title, tone, dot, accounts, onPick }) {
+/** Collapsible section wrapper — header toggles the body; expanded by default. */
+function Section({ title, tone = 'text-txt-secondary', dot, count, children }) {
+  const [open, setOpen] = useState(true);
   return (
     <div className="border border-border rounded-lg overflow-hidden">
-      <div className="px-3 py-1.5 bg-bg/50 border-b border-border flex items-center justify-between">
+      <button
+        className={`w-full flex items-center justify-between px-3 py-1.5 bg-bg/50 ${open ? 'border-b border-border' : ''}`}
+        onClick={() => setOpen((o) => !o)}
+      >
         <span className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${tone}`}>
+          <svg className={`w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+          </svg>
           {dot && <span className="w-2 h-2 rounded-sm" style={{ background: dot }} />}
           {title}
         </span>
-        <span className="text-[10px] text-txt-secondary tabular-nums">{accounts.length}</span>
-      </div>
+        {count != null && <span className="text-[10px] text-txt-secondary tabular-nums">{count}</span>}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
+/** A labelled, collapsible, scrollable list of clickable account names. */
+function AccountSection({ title, tone, dot, accounts, onPick }) {
+  return (
+    <Section title={title} tone={tone} dot={dot} count={accounts.length}>
       <div className="max-h-40 overflow-auto divide-y divide-border/40">
         {accounts.length === 0 ? (
           <div className="text-[11px] text-txt-secondary px-3 py-2">None</div>
@@ -343,7 +354,7 @@ function AccountSection({ title, tone, dot, accounts, onPick }) {
           ))
         )}
       </div>
-    </div>
+    </Section>
   );
 }
 
