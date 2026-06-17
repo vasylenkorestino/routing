@@ -6,6 +6,7 @@ export const getRoutes = (params) => client.get('/routing/routes', { params }).t
 export const getDrivers = () => client.get('/routing/drivers').then((r) => r.data);
 export const getServiceLocations = (params) => client.get('/routing/service-locations', { params }).then((r) => r.data);
 export const getRouteByDriver = (params) => client.get('/routing/route-by-driver', { params }).then((r) => r.data);
+export const getCompareRoutes = (params) => client.get('/routing/compare-routes', { params }).then((r) => r.data);
 
 /* ── Route mutations ─────────────────────────────────────── */
 export const updateRoute = (body) => client.post('/routing/update-route', body).then((r) => r.data);

@@ -130,13 +130,23 @@ export default function RouteCard({ route }) {
       </div>
 
       {/* Metrics */}
-      <div className="flex gap-1 ml-10">
+      <div className="flex items-center gap-1 ml-10">
         {metrics.filter((m) => m.label !== 'Date').map((m) => (
           <div key={m.label} className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5">
             <span className="text-[10px] uppercase tracking-wider text-txt-secondary font-medium">{m.label}</span>
             <span className="text-xs font-bold text-txt tabular-nums">{m.value}</span>
           </div>
         ))}
+        <button
+          className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition ml-auto flex items-center gap-1"
+          onClick={() => openModal('isCompare')}
+          title="Compare with another route"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+          </svg>
+          Compare
+        </button>
       </div>
 
       {/* Actions — disabled once the route is completed (matches LWC routingApplication.routeCompleted) */}
