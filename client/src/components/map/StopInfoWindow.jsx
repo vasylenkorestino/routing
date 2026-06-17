@@ -10,8 +10,15 @@ import { getErrorMessage } from '../../utils/error';
 export default function StopInfoWindow({ stop, onClose }) {
   const sfInstanceUrl = useStore((s) => s.sfInstanceUrl);
   const refreshRoutes = useStore((s) => s.refreshRoutes);
+  const currentRouteId = useStore((s) => s.routeId);
+  const currentRouteName = useStore((s) => s.route?.Name);
   const [removing, setRemoving] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // A stop belongs to the current route unless it was clicked on a comparison
+  // (historical/completed) route overlay. Only current-route stops can be removed.
+  const belongsToCurrent = !stop._googleRouteId || stop._googleRouteId === currentRouteId;
   const [showServices, setShowServices] = useState(false);
   const [services, setServices] = useState(null);
   const [loadingServices, setLoadingServices] = useState(false);
@@ -32,6 +39,20 @@ export default function StopInfoWindow({ stop, onClose }) {
       toast.error(getErrorMessage(err));
     }
   }, [stop, refreshRoutes, onClose]);
+
+  const handleAddToCurrent = useCallback(async () => {
+    if (!currentRouteId) { toast.info('Please select a route first'); return; }
+    setAdding(true);
+    try {
+      await routingApi.addPoint({ accountId: stop.AccountId__c, routeId: currentRouteId, ticketType: '' });
+      await refreshRoutes();
+      toast.success(`Added "${stop.Account_Name__c || stop.Name}" to ${currentRouteName || 'current route'}.`);
+      onClose();
+    } catch (err) {
+      setAdding(false);
+      toast.error(getErrorMessage(err));
+    }
+  }, [stop, currentRouteId, currentRouteName, refreshRoutes, onClose]);
 
   const handleLastServices = useCallback(async () => {
     if (showServices) { setShowServices(false); return; }
@@ -108,19 +129,35 @@ export default function StopInfoWindow({ stop, onClose }) {
         )}
 
         {/* Action buttons */}
-        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          <button
-            onClick={() => setConfirmOpen(true)}
-            disabled={removing}
-            style={{
-              padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6,
-              border: 'none', cursor: 'pointer',
-              background: '#ef4444', color: '#fff',
-              opacity: removing ? 0.5 : 1,
-            }}
-          >
-            {removing ? 'Removing…' : 'Remove'}
-          </button>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+          {belongsToCurrent ? (
+            <button
+              onClick={() => setConfirmOpen(true)}
+              disabled={removing}
+              style={{
+                padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+                border: 'none', cursor: 'pointer',
+                background: '#ef4444', color: '#fff',
+                opacity: removing ? 0.5 : 1,
+              }}
+            >
+              {removing ? 'Removing…' : 'Remove'}
+            </button>
+          ) : (
+            <button
+              onClick={handleAddToCurrent}
+              disabled={adding}
+              title={`Add this stop to ${currentRouteName || 'the current route'}`}
+              style={{
+                padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+                border: 'none', cursor: 'pointer',
+                background: '#16a34a', color: '#fff',
+                opacity: adding ? 0.5 : 1,
+              }}
+            >
+              {adding ? 'Adding…' : 'Add to Current Route'}
+            </button>
+          )}
           <button
             onClick={handleLastServices}
             style={{

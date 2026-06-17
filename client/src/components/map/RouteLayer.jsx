@@ -231,7 +231,7 @@ function SingleRoute({ route, onSelectStop, forceVisible = false }) {
             strokeColor: '#fff',
             strokeWeight: 2.5,
           }}
-          onClick={() => onSelectStop({ ...pt, _routeName: route.Name, _color: color })}
+          onClick={() => onSelectStop({ ...pt, _routeName: route.Name, _color: color, _googleRouteId: route.Id ?? route.id })}
         />
       ))}
 
