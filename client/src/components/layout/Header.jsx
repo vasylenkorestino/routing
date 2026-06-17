@@ -12,10 +12,19 @@ import logoUrl from '../../assets/eazygrease-logo.png';
 
 const ICON_BTN = 'h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition';
 
-/** Brand logo shown on the far-left of the header. */
+/** Brand logo shown on the far-left of the header. Transparent PNG on the white
+ *  toolbar; scaled up slightly via transform so it reads larger without growing
+ *  its layout box. */
 function Logo() {
   return (
-    <img src={logoUrl} alt="Eazy Grease" className="h-7 md:h-8 w-auto rounded-md select-none shrink-0" draggable={false} />
+    <span className="inline-flex items-center shrink-0 overflow-visible pr-1.5">
+      <img
+        src={logoUrl}
+        alt="Eazy Grease"
+        draggable={false}
+        className="h-7 md:h-8 w-auto object-contain select-none origin-left scale-125 md:scale-110 transition-transform"
+      />
+    </span>
   );
 }
 
@@ -55,11 +64,11 @@ function NewButton({ onClick }) {
   );
 }
 
-/** "AI Generate" button. */
-function AIGenerateButton({ onClick }) {
+/** "AI Generate" button. On mobile the label is shortened to "AI" to save space. */
+function AIGenerateButton({ onClick, label = 'AI Generate' }) {
   return (
     <button className="h-8 px-3 rounded-lg bg-ai text-white text-[13px] font-medium hover:bg-ai-hover transition flex items-center gap-1 shrink-0" onClick={onClick}>
-      <span className="text-xs">✦</span> AI Generate
+      <span className="text-xs">✦</span> {label}
     </button>
   );
 }
@@ -157,32 +166,36 @@ export default function Header() {
     </button>
   );
 
-  // --- Mobile: two rows ---
+  // --- Mobile: single row (filters expand into a dropdown) ---
   if (isMobile) {
     return (
-      <header className="flex flex-col gap-1.5 px-3 py-1.5 bg-surface border-b border-border shrink-0 z-10">
-        {/* Row 1: logo (left) — refresh, notifications, settings (right) */}
-        <div className="flex items-center gap-2">
-          <Logo />
-          <div className="flex-1" />
-          <RefreshButton onClick={() => refreshRoutes()} loading={isLoading} />
-          <BellMenu />
-          {driver?.isAdmin && <SettingsButton onClick={() => navigate('/admin')} />}
+      <header className="relative flex items-center gap-1.5 px-2.5 py-1.5 bg-surface border-b border-border shrink-0 z-20">
+        <Logo />
+        {filtersToggle}
+        {/* Routes flexes to absorb the remaining space and shrink when tight */}
+        <div className="flex-1 min-w-0">
+          <Select
+            value={routeId || ''}
+            onChange={(v) => selectRoute(v || null)}
+            options={routeOptions}
+            placeholder="Routes"
+            searchable
+            className="w-full"
+          />
         </div>
+        <RefreshButton onClick={() => refreshRoutes()} loading={isLoading} />
+        <NewButton onClick={() => openModal('isNew')} />
+        <AIGenerateButton onClick={() => openModal('isAIGenerate')} label="AI" />
+        <ProgressButton genStatus={genStatus} genPanelOpen={genPanelOpen} onClick={toggleGenPanel} />
+        <BellMenu />
+        {driver?.isAdmin && <SettingsButton onClick={() => navigate('/admin')} />}
 
-        {/* Row 2: filters, routes, new, ai generate */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {filtersToggle}
-          {routesSelect}
-          <NewButton onClick={() => openModal('isNew')} />
-          <AIGenerateButton onClick={() => openModal('isAIGenerate')} />
-          <ProgressButton genStatus={genStatus} genPanelOpen={genPanelOpen} onClick={toggleGenPanel} />
-          {filtersOpen && (
-            <div className="flex flex-wrap items-center gap-1.5 basis-full">
-              {advancedFilters}
-            </div>
-          )}
-        </div>
+        {/* Date / Record Type / Location — dropdown so the action row never wraps */}
+        {filtersOpen && (
+          <div className="absolute left-2 right-2 top-full mt-1 z-30 flex flex-wrap items-center gap-1.5 p-2 bg-surface border border-border rounded-xl shadow-xl">
+            {advancedFilters}
+          </div>
+        )}
 
         <ActionLogsPanel open={actionLogsOpen} onClose={closeActionLogs} />
         <ErrorLogsPanel open={logsOpen} onClose={closeLogs} />
