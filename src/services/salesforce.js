@@ -3,10 +3,31 @@ const sfConfig = require('../config/salesforce');
 const logger = require('../utils/logger');
 
 let connection = null;
+let loginPromise = null;
 
-/** Returns an authenticated jsforce connection, reusing the existing one if still valid. */
+/** Authenticates a fresh connection and only publishes it once fully initialized. */
+async function authenticate() {
+  if (!sfConfig.username || !sfConfig.password) {
+    throw new Error('Salesforce credentials are not configured (SF_USERNAME / SF_PASSWORD).');
+  }
+  const conn = new jsforce.Connection({ loginUrl: sfConfig.loginUrl });
+  await conn.login(sfConfig.username, sfConfig.password);
+  if (!conn.instanceUrl || !conn.accessToken) {
+    throw new Error('Salesforce login did not return a valid session (missing instance URL).');
+  }
+  connection = conn;
+  logger.info('Salesforce authenticated', { user: sfConfig.username, instanceUrl: conn.instanceUrl });
+  return conn;
+}
+
+/**
+ * Returns an authenticated jsforce connection, reusing the existing one if still valid.
+ * Concurrent callers share a single in-flight login so we never publish (or return) a
+ * half-initialized connection — which previously surfaced as "Only absolute URLs are
+ * supported" when a connection lacked its instanceUrl.
+ */
 async function getConnection() {
-  if (connection && connection.accessToken) {
+  if (connection && connection.accessToken && connection.instanceUrl) {
     try {
       await connection.identity();
       return connection;
@@ -16,12 +37,10 @@ async function getConnection() {
     }
   }
 
-  connection = new jsforce.Connection({ loginUrl: sfConfig.loginUrl });
-
-  await connection.login(sfConfig.username, sfConfig.password);
-  logger.info('Salesforce authenticated', { user: sfConfig.username });
-
-  return connection;
+  if (!loginPromise) {
+    loginPromise = authenticate().finally(() => { loginPromise = null; });
+  }
+  return loginPromise;
 }
 
 /** Executes a SOQL query and returns all records. */
