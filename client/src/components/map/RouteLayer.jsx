@@ -173,12 +173,12 @@ function NativePolyline({ path, color, visible }) {
 }
 
 /** Single route rendered on map */
-function SingleRoute({ route, onSelectStop }) {
+function SingleRoute({ route, onSelectStop, forceVisible = false }) {
   const hiddenRouteIds = useStore((s) => s.hiddenRouteIds);
   const serviceLocations = useStore((s) => s.serviceLocations);
 
   const id = route.Id ?? route.id;
-  const visible = !hiddenRouteIds[id];
+  const visible = forceVisible || !hiddenRouteIds[id];
   const color = route._color ?? '#2563eb';
 
   const slMap = {};
@@ -266,6 +266,26 @@ function SingleRoute({ route, onSelectStop }) {
           title={`End: ${endSL.Name}`}
         />
       )}
+    </>
+  );
+}
+
+/**
+ * Compare overlay — renders the comparison route on top of the current one,
+ * always visible and in its own contrasting colour, with an independent
+ * stop info window.
+ */
+export function CompareRouteLayer() {
+  const compareRoute = useStore((s) => s.compareRoute);
+  const [selectedStop, setSelectedStop] = useState(null);
+  const handleClose = useCallback(() => setSelectedStop(null), []);
+
+  if (!compareRoute) return null;
+
+  return (
+    <>
+      <SingleRoute route={compareRoute} onSelectStop={setSelectedStop} forceVisible />
+      {selectedStop && <StopInfoWindow stop={selectedStop} onClose={handleClose} />}
     </>
   );
 }

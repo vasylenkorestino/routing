@@ -8,6 +8,7 @@ import mapSlice from './mapSlice';
 import aiSlice from './aiSlice';
 import bellSlice from './bellSlice';
 import generationSlice from './generationSlice';
+import compareSlice from './compareSlice';
 
 /** Combined Zustand store — all domain slices merged */
 const useStore = create(
@@ -21,6 +22,7 @@ const useStore = create(
       ...aiSlice(...a),
       ...bellSlice(...a),
       ...generationSlice(...a),
+      ...compareSlice(...a),
     }),
     {
       // Keep the user's active context across page refreshes. Session-scoped so a

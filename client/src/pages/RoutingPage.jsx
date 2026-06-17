@@ -12,7 +12,7 @@ import RouteCreator from '../components/routes/RouteCreator';
 import RouteSplitter from '../components/routes/RouteSplitter';
 import RouteCombiner from '../components/routes/RouteCombiner';
 import RouteCompleter from '../components/routes/RouteCompleter';
-import CompareRouteModal from '../components/routes/CompareRouteModal';
+import RouteComparePanel from '../components/routes/RouteComparePanel';
 import PointEditor from '../components/drivers/PointEditor';
 import LastServices from '../components/shared/LastServices';
 import TankSensorData from '../components/shared/TankSensorData';
@@ -30,8 +30,11 @@ function RightPanel() {
   const routes = useStore((s) => s.routes);
   const isEdit = useStore((s) => s.isEdit);
   const isLoading = useStore((s) => s.isLoading);
+  const compareMode = useStore((s) => s.compareMode);
   const [selectedPoint, setSelectedPoint] = useState(null);
   const [bottomTab, setBottomTab] = useState('services');
+
+  if (compareMode && route) return <RouteComparePanel />;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -174,7 +177,6 @@ export default function RoutingPage() {
   const isSplit = useStore((s) => s.isSplit);
   const isCombine = useStore((s) => s.isCombine);
   const isComplete = useStore((s) => s.isComplete);
-  const isCompare = useStore((s) => s.isCompare);
   const isEditPoint = useStore((s) => s.isEditPoint);
   const isReviewOpen = useStore((s) => s.isReviewOpen);
   const isAIGenerate = useStore((s) => s.isAIGenerate);
@@ -209,7 +211,6 @@ export default function RoutingPage() {
       {isSplit && <RouteSplitter />}
       {isCombine && <RouteCombiner />}
       {isComplete && <RouteCompleter />}
-      {isCompare && <CompareRouteModal />}
       {isEditPoint && <PointEditor />}
       {isReviewOpen && <AIReviewPanel />}
       {isAIGenerate && <AIGenerateModal onClose={() => useStore.getState().closeModal('isAIGenerate')} />}

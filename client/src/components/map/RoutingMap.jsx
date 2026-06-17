@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { GoogleMap, useLoadScript, Marker, InfoWindow } from '@react-google-maps/api';
 import useStore from '../../store';
 import { decodeRoutePolyline, isValidCoord } from '../../utils/routePolyline';
-import RouteLayer from './RouteLayer';
+import RouteLayer, { CompareRouteLayer } from './RouteLayer';
 import TicketLayer from './TicketLayer';
 import ShapeLayer from './ShapeLayer';
 import MapOverlayPanel from './MapOverlayPanel';
@@ -20,38 +20,43 @@ export default function RoutingMap() {
   const mapCenter = useStore((s) => s.mapCenter);
   const mapZoom = useStore((s) => s.mapZoom);
   const route = useStore((s) => s.route);
+  const compareRoute = useStore((s) => s.compareRoute);
   const serviceLocations = useStore((s) => s.serviceLocations);
   const mapRef = useRef(null);
   const [selectedSL, setSelectedSL] = useState(null);
 
   const onLoad = useCallback((map) => { mapRef.current = map; }, []);
 
-  /** When a route is selected, fit map bounds to its stops */
+  const compareRouteId = compareRoute?.Id ?? compareRoute?.id ?? null;
+
+  /** Fit map bounds to the current route (and the comparison route when active) */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !route || !window.google) return;
 
-    const stops = route.Routes__r?.records ?? route.Routes__r ?? [];
-    const coords = stops
-      .filter((s) => isValidCoord(Number(s.Latitude__c), Number(s.Longitude__c)))
-      .map((s) => ({ lat: Number(s.Latitude__c), lng: Number(s.Longitude__c) }));
+    const coordsOf = (r) => {
+      const stops = r?.Routes__r?.records ?? r?.Routes__r ?? [];
+      const coords = stops
+        .filter((s) => isValidCoord(Number(s.Latitude__c), Number(s.Longitude__c)))
+        .map((s) => ({ lat: Number(s.Latitude__c), lng: Number(s.Longitude__c) }));
+      const poly = decodeRoutePolyline(r?.Polyline__c, { anchors: coords });
+      return [...coords, ...poly];
+    };
 
-    if (coords.length === 0) return;
+    const all = [...coordsOf(route), ...(compareRoute ? coordsOf(compareRoute) : [])];
+    if (all.length === 0) return;
 
-    if (coords.length === 1) {
-      map.panTo(coords[0]);
+    if (all.length === 1) {
+      map.panTo(all[0]);
       map.setZoom(14);
       return;
     }
 
     const bounds = new google.maps.LatLngBounds();
-    coords.forEach((c) => bounds.extend(c));
-
-    const polyPath = decodeRoutePolyline(route.Polyline__c, { anchors: coords });
-    polyPath.forEach((p) => bounds.extend(p));
-
+    all.forEach((c) => bounds.extend(c));
     map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
-  }, [route]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route, compareRouteId]);
 
   const validSLs = (serviceLocations ?? []).filter((sl) => {
     const lat = Number(sl.Latitude__c);
@@ -86,6 +91,7 @@ export default function RoutingMap() {
       }}
     >
       {layers.routes.visible && <RouteLayer />}
+      <CompareRouteLayer />
       {layers.tickets.visible && <TicketLayer tickets={layers.tickets.data} />}
       {layers.shapes.visible && <ShapeLayer shapes={layers.shapes.data} />}
 
