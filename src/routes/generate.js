@@ -197,6 +197,8 @@ router.post('/jobs/:id/commit', async (req, res, next) => {
         serviceDate,
         recordTypeName: r.recordType || job.params.recordType,
         serviceLocationId: r.serviceLocationId || null,
+        serviceLocationStartId: r.serviceLocationStartId || r.serviceLocationId || job.params.serviceLocationId || null,
+        serviceLocationEndId: r.serviceLocationEndId || r.serviceLocationId || job.params.serviceLocationId || null,
         accountIds,
       });
     }

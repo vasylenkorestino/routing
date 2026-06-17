@@ -17,6 +17,7 @@ export default function AIChat() {
   const serviceDate = useStore((s) => s.serviceDate);
   const aiSelectedRouteIds = useStore((s) => s.aiSelectedRouteIds);
   const clearAiSelection = useStore((s) => s.clearAiSelection);
+  const refreshAfterAiCreate = useStore((s) => s.refreshAfterAiCreate);
   const [input, setInput] = useState('');
   const [activePlaceholderIdx, setActivePlaceholderIdx] = useState(null);
   const scrollRef = useRef(null);
@@ -43,6 +44,8 @@ export default function AIChat() {
             stopsCount: stops.length,
             totalDistance: r.Total_Distance__c,
             totalTime: r.Total_Time__c,
+            serviceLocationStart: r.Service_Location_Start__c,
+            serviceLocationEnd: r.Service_Location_End__c,
           };
         }),
       };
@@ -57,6 +60,8 @@ export default function AIChat() {
       totalDistance: route.Total_Distance__c,
       totalTime: route.Total_Time__c,
       stopsCount: stops.length,
+      serviceLocationStart: route.Service_Location_Start__c,
+      serviceLocationEnd: route.Service_Location_End__c,
     };
   }, [route, selectedCount, selectedRoutes, serviceDate, recordType]);
 
@@ -72,6 +77,13 @@ export default function AIChat() {
       isPlaceholder: aiJobStatus !== 'complete',
     });
     if (aiJobStatus === 'complete') {
+      const { aiJobResult, aiJobPartialResults } = useStore.getState();
+      const createdRoutes = aiJobResult?.createdRoutes || aiJobPartialResults?.createdRoutes || [];
+      if (createdRoutes.length > 0) {
+        refreshAfterAiCreate(createdRoutes).then((route) => {
+          if (route) toast.success(`Route "${route.Name}" is ready.`);
+        });
+      }
       setGenerating(false);
       setActivePlaceholderIdx(null);
       clearAIJob();
@@ -86,7 +98,7 @@ export default function AIChat() {
       clearAIJob();
       scrollBottom();
     }
-  }, [activePlaceholderIdx, aiJobStatus, aiJobSteps, aiJobFindings, aiJobProgress, aiJobMessage, aiJobError, updateMessage, setGenerating, clearAIJob, scrollBottom]);
+  }, [activePlaceholderIdx, aiJobStatus, aiJobSteps, aiJobFindings, aiJobProgress, aiJobMessage, aiJobError, updateMessage, setGenerating, clearAIJob, scrollBottom, refreshAfterAiCreate]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();

@@ -2,6 +2,7 @@ const { Router } = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const { requireDriver } = require('../middleware/auth');
 const { getConnection: getSalesforceConnection } = require('../services/salesforce');
+const { apexPost } = require('../services/sfRoutingApi');
 const { logErrorToSalesforce } = require('../services/errorLogger');
 const { logAction } = require('../services/actionLogger');
 const { createRecorder } = require('../services/stepRecorder');
@@ -26,17 +27,9 @@ async function apexGet(conn, path, params = {}) {
   return typeof res === 'string' ? JSON.parse(res) : res;
 }
 
-async function apexPost(conn, path, body) {
-  const url = `/services/apexrest/routing/${path}`;
-  logger.info(`[apexPost] ${url}`, { bodyKeys: Object.keys(body || {}) });
-  const res = await conn.request({
-    method: 'POST',
-    url,
-    body: JSON.stringify(body),
-    headers: { 'Content-Type': 'application/json' },
-  });
-  logger.info(`[apexPost] response type: ${typeof res}`);
-  return typeof res === 'string' ? JSON.parse(res) : res;
+/** Helper: call the Apex REST controller (POST). */
+async function apexPostRoute(path, body) {
+  return apexPost(path, body);
 }
 
 async function apexDelete(conn, path, params = {}) {
@@ -211,7 +204,7 @@ router.post('/update-route', wrap(async (req, res) => {
   const result = await recorder.wrap(
     'Save Route (Apex)',
     'Skill',
-    () => apexPost(conn, 'update-route', req.body),
+    () => apexPostRoute('update-route', req.body),
     { input: req.body },
   );
   logAction({ action: 'Save', status: 'Success', requestBody: req.body, responseBody: result, durationMs: Date.now() - t0, userInfo: req.driver?.name, googleRouteId: req.body.googleRoute?.Id, source: 'POST /routing/update-route', steps: recorder.steps });
@@ -225,7 +218,7 @@ router.post('/optimize-route', wrap(async (req, res) => {
   const result = await recorder.wrap(
     'Optimize Route (Apex)',
     'Skill',
-    () => apexPost(conn, 'optimize-route', req.body),
+    () => apexPostRoute('optimize-route', req.body),
     { input: req.body },
   );
   logAction({ action: 'Optimize', status: 'Success', requestBody: req.body, responseBody: result, durationMs: Date.now() - t0, userInfo: req.driver?.name, googleRouteId: req.body.googleRoute?.Id, source: 'POST /routing/optimize-route', steps: recorder.steps });
@@ -234,47 +227,47 @@ router.post('/optimize-route', wrap(async (req, res) => {
 
 router.post('/split-route', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'split-route', req.body));
+  res.json(await apexPostRoute('split-route', req.body));
 }));
 
 router.post('/combine-routes', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'combine-routes', req.body));
+  res.json(await apexPostRoute('combine-routes', req.body));
 }));
 
 router.post('/complete-route', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'complete-route', req.body));
+  res.json(await apexPostRoute('complete-route', req.body));
 }));
 
 router.post('/update-point', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'update-point', req.body));
+  res.json(await apexPostRoute('update-point', req.body));
 }));
 
 router.post('/create-routes', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'create-routes', req.body));
+  res.json(await apexPostRoute('create-routes', req.body));
 }));
 
 router.post('/generate-route-by-shape', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'generate-route-by-shape', req.body));
+  res.json(await apexPostRoute('generate-route-by-shape', req.body));
 }));
 
 router.post('/add-point', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'add-point', req.body));
+  res.json(await apexPostRoute('add-point', req.body));
 }));
 
 router.post('/ai-approve', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'ai-approve', req.body));
+  res.json(await apexPostRoute('ai-approve', req.body));
 }));
 
 router.post('/ai-decline', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexPost(conn, 'ai-decline', req.body));
+  res.json(await apexPostRoute('ai-decline', req.body));
 }));
 
 router.delete('/delete-route/:id', wrap(async (req, res) => {

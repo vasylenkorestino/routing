@@ -205,6 +205,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
       let finalText = '';
       let iterations = 0;
       let lastToolNames = [];
+      const createdRoutes = [];
 
       emit({ phase: 'thinking', iteration: 0, label: 'Understanding your request…' });
 
@@ -290,6 +291,9 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
             let toolError = null;
             try {
               result = await skillRegistry.execute(toolUse.name, toolUse.input);
+              if (toolUse.name === 'route_generation' && Array.isArray(result?.googleRoutes)) {
+                createdRoutes.push(...result.googleRoutes);
+              }
             } catch (err) {
               logger.error(`Tool ${toolUse.name} failed`, { error: err.message });
               result = { error: err.message };
@@ -326,6 +330,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
         message: finalText,
         iterations,
         toolCallsExecuted: messages.filter((m) => m.role === 'user' && Array.isArray(m.content)).length,
+        createdRoutes,
         steps: recorder ? recorder.steps : [],
       };
     },

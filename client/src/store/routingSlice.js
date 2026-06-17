@@ -182,6 +182,37 @@ const routingSlice = (set, get) => ({
     }
   },
 
+  /**
+   * Polls until AI-created routes appear, then selects the primary route.
+   * Ensures the map and route panel update without a manual refresh.
+   */
+  refreshAfterAiCreate: async (createdRoutes = []) => {
+    const routeIds = createdRoutes.map((r) => r.id).filter(Boolean);
+    const primaryId = routeIds[0] || null;
+    const maxAttempts = 10;
+    const intervalMs = 1500;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      await get().refreshRoutes();
+      if (primaryId) {
+        const found = get().routes.find((r) => (r.Id ?? r.id) === primaryId);
+        if (found) {
+          get().selectRoute(primaryId);
+          if (!get().layers?.routes?.visible) get().toggleLayer('routes');
+          return found;
+        }
+      } else if (get().route) {
+        return get().route;
+      }
+      if (attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+    }
+
+    if (primaryId) get().selectRoute(primaryId);
+    return get().route;
+  },
+
   setServiceDate: (serviceDate) => set({ serviceDate }),
   setRecordType: (recordType) => set({ recordType }),
   setServiceLocation: (serviceLocation) => set({ serviceLocation }),

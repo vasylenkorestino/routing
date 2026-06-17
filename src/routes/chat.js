@@ -59,7 +59,9 @@ function buildContextPrompt(context, recordType) {
         ` | Driver: ${r.driver || '—'}` +
         ` | Stops: ${r.stopsCount ?? 0}` +
         ` | Distance: ${r.totalDistance || '—'}` +
-        ` | Time: ${r.totalTime || '—'}`,
+        ` | Time: ${r.totalTime || '—'}` +
+        (r.serviceLocationStart ? ` | Start yard: ${r.serviceLocationStart}` : '') +
+        (r.serviceLocationEnd ? ` | End yard: ${r.serviceLocationEnd}` : ''),
       );
     });
     const idList = context.routes.map((r) => r.routeId).filter(Boolean);
@@ -70,6 +72,8 @@ function buildContextPrompt(context, recordType) {
     parts.push('2. Optionally call account_discovery for the same date and record type to widen the candidate pool.');
     parts.push('3. Apply routing rules to group accounts into NEW optimized routes.');
     parts.push('4. Call route_generation to create Google_Route__c + Route__c records (isAI__c = true, isInherit__c = true, isAIApproved__c = false).');
+    parts.push('   Each route MUST set serviceLocationStartId and serviceLocationEndId (Service_Location_Start__c / Service_Location_End__c).');
+    parts.push('   Copy yards from multi_route_context or the selected routes above; pass sourceRouteId when rebuilding a single route.');
     parts.push('5. Reply with a short summary — do not list every stop.');
     parts.push('--- END CONTEXT ---\n');
     return parts.join('\n');
@@ -81,7 +85,10 @@ function buildContextPrompt(context, recordType) {
   if (context.driver) parts.push(`Driver: ${context.driver}`);
   if (recordType) parts.push(`Record Type: ${recordType}`);
   parts.push(`Stops: ${context.stopsCount ?? 0}`);
+  if (context.serviceLocationStart) parts.push(`Start yard (Service_Location_Start__c): ${context.serviceLocationStart}`);
+  if (context.serviceLocationEnd) parts.push(`End yard (Service_Location_End__c): ${context.serviceLocationEnd}`);
   parts.push('Instruction: Call compare_routes and route_enhancement to load stop/account details and historical diff before making changes.');
+  parts.push('When calling route_generation, set serviceLocationStartId/serviceLocationEndId from the yards above (or pass sourceRouteId).');
   parts.push('--- END CONTEXT ---\n');
   return parts.join('\n');
 }
@@ -184,6 +191,9 @@ async function runChatJob(jobId, body) {
   aiJobs.upsertStep(jobId, { id: 'respond', label: 'Preparing response', status: 'done' });
   aiJobs.setMessage(jobId, result.message);
   if (sessionId) sessionStore.append(sessionId, { role: 'assistant', content: result.message });
+  if (Array.isArray(result.createdRoutes) && result.createdRoutes.length > 0) {
+    aiJobs.mergePartialResults(jobId, { createdRoutes: result.createdRoutes });
+  }
 
   return { result, recorder, fullUserMessage: message + buildContextPrompt(context, recordType), systemPrompt: { staticPrompt, dynamicPrompt } };
 }

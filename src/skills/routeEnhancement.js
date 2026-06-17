@@ -110,6 +110,8 @@ class RouteEnhancementSkill extends BaseSkill {
       Service_Date__c: route.Service_Date__c,
       Miles__c: route.Miles__c,
       Minutes__c: route.Minutes__c,
+      Service_Location_Start__c: route.Service_Location_Start__c,
+      Service_Location_End__c: route.Service_Location_End__c,
       stopCount: stops.length,
       stops: stops.map((s) => ({
         Id: s.Id,

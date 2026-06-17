@@ -42,6 +42,7 @@ export default function GeneratedRoutesReview() {
   const committing = useStore((s) => s.genCommitting);
   const close = useStore((s) => s.closeGenReview);
   const commit = useStore((s) => s.commitGeneratedRoutes);
+  const refreshAfterAiCreate = useStore((s) => s.refreshAfterAiCreate);
   const regenerate = useStore((s) => s.regenerateRoutes);
   const combine = useStore((s) => s.combineGeneratedRoutes);
   const split = useStore((s) => s.splitGeneratedRoute);
@@ -69,6 +70,9 @@ export default function GeneratedRoutesReview() {
         toast.success(`Created ${res.created} route(s), ${res.totalStops} stop(s)`);
         if (res.skipped?.length) toast.error(`${res.skipped.length} route(s) skipped (already routed)`);
         close();
+        if (res.googleRoutes?.length) {
+          await refreshAfterAiCreate(res.googleRoutes);
+        }
       }
     } catch (err) {
       toast.error(getErrorMessage(err));
