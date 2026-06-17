@@ -131,42 +131,35 @@ export default function RouteCard({ route }) {
       </div>
 
       {/* Metrics */}
-      <div className="flex items-center gap-1 ml-10">
+      <div className="flex flex-wrap items-center gap-1.5 ml-10">
         {metrics.filter((m) => m.label !== 'Date').map((m) => (
           <div key={m.label} className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5">
             <span className="text-[10px] uppercase tracking-wider text-txt-secondary font-medium">{m.label}</span>
             <span className="text-xs font-bold text-txt tabular-nums">{m.value}</span>
           </div>
         ))}
-        <button
-          className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition ml-auto flex items-center gap-1"
-          onClick={openCompare}
-          title="Compare with another route"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
-          </svg>
-          Compare
-        </button>
       </div>
 
-      {/* Actions — disabled once the route is completed (matches LWC routingApplication.routeCompleted) */}
-      {!routeCompleted && (
-        <>
-          <div className="flex gap-1.5 flex-wrap ml-10">
-            <button className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-hover transition" onClick={() => openModal('isEdit')}>Edit</button>
-            <button className="h-7 px-3 rounded-lg bg-ai text-white text-[11px] font-medium hover:bg-ai-hover transition" onClick={handleOptimize} disabled={optimizing}>Optimize</button>
-            <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => openModal('isCombine')}>Combine</button>
-            <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => openModal('isSplit')}>Split</button>
-            <button className="h-7 px-3 rounded-lg bg-ai text-white text-[11px] font-medium hover:bg-ai-hover transition flex items-center gap-1" onClick={() => openModal('isAIEnhance')}>
-              <span className="text-[9px]">✦</span> AI Enhance
-            </button>
-          </div>
+      {/* Actions — edit actions hidden once the route is completed; Compare always available */}
+      <div className="flex flex-wrap gap-1.5 ml-10">
+        {!routeCompleted && (
+          <>
+            <ActionBtn variant="primary" onClick={() => openModal('isEdit')} icon={ICONS.edit}>Edit</ActionBtn>
+            <ActionBtn variant="ai" onClick={handleOptimize} disabled={optimizing} icon={ICONS.optimize}>Optimize</ActionBtn>
+            <ActionBtn onClick={() => openModal('isCombine')}>Combine</ActionBtn>
+            <ActionBtn onClick={() => openModal('isSplit')}>Split</ActionBtn>
+          </>
+        )}
+        <ActionBtn onClick={openCompare} icon={ICONS.compare} title="Compare with another route">Compare</ActionBtn>
+        {!routeCompleted && (
+          <ActionBtn variant="ai" onClick={() => openModal('isAIEnhance')} icon={<span className="text-[10px] leading-none">✦</span>}>AI Enhance</ActionBtn>
+        )}
+      </div>
 
-          <div className="ml-10">
-            <AccountTicketSearch mode="add" />
-          </div>
-        </>
+      {!routeCompleted && (
+        <div className="ml-10">
+          <AccountTicketSearch mode="add" />
+        </div>
       )}
 
       {routeCompleted && route.Comment__c && (
@@ -178,3 +171,41 @@ export default function RouteCard({ route }) {
     </div>
   );
 }
+
+const BTN_VARIANTS = {
+  primary: 'bg-primary text-white hover:bg-primary-hover shadow-sm',
+  ai: 'bg-ai text-white hover:bg-ai-hover shadow-sm',
+  ghost: 'bg-bg text-txt border border-border hover:bg-border/50',
+};
+
+/** Shared route-action button — consistent sizing, icon slot, and colour variants. */
+function ActionBtn({ variant = 'ghost', icon, children, className = '', ...props }) {
+  return (
+    <button
+      className={`h-8 px-3 rounded-lg text-xs font-medium transition inline-flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 ${BTN_VARIANTS[variant]} ${className}`}
+      {...props}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+const ICON_CLS = 'w-3.5 h-3.5';
+const ICONS = {
+  edit: (
+    <svg className={ICON_CLS} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+    </svg>
+  ),
+  optimize: (
+    <svg className={ICON_CLS} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+    </svg>
+  ),
+  compare: (
+    <svg className={ICON_CLS} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+    </svg>
+  ),
+};

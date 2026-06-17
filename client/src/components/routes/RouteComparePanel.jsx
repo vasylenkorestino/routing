@@ -177,7 +177,7 @@ export default function RouteComparePanel() {
           </div>
 
           {advancedOpen && (
-            <div className="px-3 py-2 border-b border-border grid grid-cols-2 gap-2">
+            <div className="px-3 py-2 border-b border-border grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Field label="Route Name">
                 <input className="input-field" value={filterName} onChange={(e) => setFilterName(e.target.value)} placeholder="Exact route name" />
               </Field>
@@ -271,8 +271,8 @@ export default function RouteComparePanel() {
               </div>
             </Section>
 
-            {/* Difference sections — side by side */}
-            <div className="grid grid-cols-3 gap-3">
+            {/* Difference sections — side by side on larger screens, stacked on mobile */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <AccountSection title="In all selected routes" tone="text-success" accounts={sections.inAll} onPick={openDetail} />
               <AccountSection title="Only in current route" tone="text-primary" dot={currentColor} accounts={sections.onlyCurrent} onPick={openDetail} />
               <AccountSection title="Only in comparison routes" tone="text-ai" accounts={sections.onlyComparison} onPick={openDetail} />
