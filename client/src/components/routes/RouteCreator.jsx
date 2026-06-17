@@ -44,20 +44,29 @@ export default function RouteCreator() {
   const [sortKey, setSortKey] = useState('Name');
   const [sortAsc, setSortAsc] = useState(true);
 
+  // Sync modal fields when opened.
   useEffect(() => {
     if (!isNew) return;
     setDate(serviceDate);
     setRecType(recordType);
+    setSvcLoc(serviceLocation || '');
+    setSelected([]);
+  }, [isNew, serviceDate, recordType, serviceLocation]);
+
+  // Load inherit templates filtered by service location (Google routes + shapes).
+  useEffect(() => {
+    if (!isNew) return;
+    const locParam = svcLoc || 'All';
     setFetching(true);
     (async () => {
       try {
         const [routeRes, shapeRes] = await Promise.allSettled([
-          routingApi.getGoogleRouteTemplates({ serviceDate, recordTypeName: recordType }),
-          routingApi.getShapes({ recordTypeName: recordType, serviceLocationId: serviceLocation || 'All' }),
+          routingApi.getCustomRoutes({ recordTypeName: recordType, serviceLocationId: locParam }),
+          routingApi.getShapes({ recordTypeName: recordType, serviceLocationId: locParam }),
         ]);
 
         const routes = routeRes.status === 'fulfilled'
-          ? (Array.isArray(routeRes.value) ? routeRes.value : routeRes.value.templates || [])
+          ? (Array.isArray(routeRes.value) ? routeRes.value : [])
           : [];
         const shapes = shapeRes.status === 'fulfilled'
           ? (Array.isArray(shapeRes.value) ? shapeRes.value : [])
@@ -71,7 +80,7 @@ export default function RouteCreator() {
       } catch { setTemplates([]); }
       setFetching(false);
     })();
-  }, [isNew, serviceDate, recordType, serviceLocation]);
+  }, [isNew, recordType, svcLoc]);
 
   const toggleTemplate = (id) => {
     setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -181,7 +190,14 @@ export default function RouteCreator() {
             </Field>
             {tab === 'inherit' && (
               <Field label="Service Location" className="flex-1">
-                <select className="input-field" value={svcLoc} onChange={(e) => setSvcLoc(e.target.value)}>
+                <select
+                  className="input-field"
+                  value={svcLoc}
+                  onChange={(e) => {
+                    setSvcLoc(e.target.value);
+                    setSelected([]);
+                  }}
+                >
                   <option value="">All</option>
                   {serviceLocations.map((loc) => <option key={loc.Id} value={loc.Id}>{loc.Name}</option>)}
                 </select>
