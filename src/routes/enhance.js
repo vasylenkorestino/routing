@@ -22,7 +22,7 @@ YOUR TASKS:
 For each item in your output, provide:
 - accountId: the Account Id
 - accountName: the account name
-- action: "keep" | "remove" | "flag" | "add"
+- action: "keep" | "remove" | "flag" | "add" | "overflow"  (use "overflow" when keeping/adding the stop risks exceeding truck capacity and needs a manager call)
 - confidence: 0-100
 - reason: 1-2 sentence explanation
 
@@ -295,23 +295,74 @@ router.post('/', async (req, res, next) => {
   }
 });
 
-/** POST /api/enhance-route/approve — update RouteLog__c status; Salesforce trigger handles Route__c creation */
+/**
+ * POST /api/enhance-route/approve — apply manager decisions to RouteLog__c.
+ *
+ * Outcome semantics (resolved on the client from each log's flag + decision):
+ *   add    -> Status Accepted (Salesforce trigger inserts the Route__c stop)
+ *   keep   -> Status Accepted (no-op for an existing stop)
+ *   remove -> Status Declined (so the trigger never re-adds) + delete the Route__c stop
+ *   ignore -> Status Declined (leave the route unchanged)
+ *
+ * Accepts the new `resolutions: [{ logId, outcome }]` payload, or the legacy
+ * `{ logIds, status }` payload (Accepted -> add, Declined -> ignore).
+ */
 router.post('/approve', async (req, res, next) => {
   try {
-    const { logIds, status } = req.body;
-    if (!logIds?.length || !status) return res.status(400).json({ error: 'logIds and status required' });
+    const { logIds, status, resolutions } = req.body;
+
+    let items;
+    if (Array.isArray(resolutions) && resolutions.length) {
+      items = resolutions
+        .filter((r) => r?.logId && r?.outcome)
+        .map((r) => ({ logId: r.logId, outcome: r.outcome }));
+    } else if (logIds?.length && status) {
+      const outcome = status === 'Accepted' ? 'add' : 'ignore';
+      items = logIds.map((id) => ({ logId: id, outcome }));
+    }
+
+    if (!items?.length) {
+      return res.status(400).json({ error: 'resolutions or logIds+status required' });
+    }
 
     const userName = req.driver?.name || 'Unknown';
+    const now = new Date().toISOString();
     const conn = await getConnection();
-    const updates = logIds.map((id) => ({
-      Id: id,
-      Status__c: status,
+
+    const statusFor = (o) => (o === 'add' || o === 'keep' ? 'Accepted' : 'Declined');
+
+    // Look up account + route for any removals so we can delete the matching stop.
+    const removeIds = items.filter((i) => i.outcome === 'remove').map((i) => i.logId);
+    const logsById = {};
+    if (removeIds.length) {
+      const idList = removeIds.map((id) => `'${id}'`).join(',');
+      const q = await conn.query(`SELECT Id, Account__c, Google_Route__c FROM RouteLog__c WHERE Id IN (${idList})`);
+      (q.records || []).forEach((r) => { logsById[r.Id] = r; });
+    }
+
+    const updates = items.map((i) => ({
+      Id: i.logId,
+      Status__c: statusFor(i.outcome),
       Accepted_By__c: userName,
-      Accepted_Date__c: new Date().toISOString(),
+      Accepted_Date__c: now,
     }));
     await conn.sobject('RouteLog__c').update(updates);
 
-    res.json({ success: true, updated: logIds.length, added: status === 'Accepted' ? logIds : [] });
+    const removed = [];
+    for (const id of removeIds) {
+      const log = logsById[id];
+      if (!log?.Account__c || !log?.Google_Route__c) continue;
+      const pts = await conn.query(
+        `SELECT Id FROM Route__c WHERE GRoute_Id__c = '${log.Google_Route__c}' AND AccountId__c = '${log.Account__c}'`
+      );
+      if (pts.records?.length) {
+        await conn.sobject('Route__c').destroy(pts.records.map((p) => p.Id));
+        removed.push(id);
+      }
+    }
+
+    const added = items.filter((i) => i.outcome === 'add').map((i) => i.logId);
+    res.json({ success: true, updated: items.length, added, removed });
   } catch (err) {
     next(err);
   }

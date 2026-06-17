@@ -79,10 +79,14 @@ const routingSlice = (set, get) => ({
       const routes = normalizeRoutes(data.routes ?? []);
       console.log('[loadRoutingData] response:', { routes: routes.length, drivers: data?.drivers?.length, serviceLocations: data?.serviceLocations?.length });
 
+      // Honor an explicit target, otherwise keep the currently/persisted selected
+      // route when it still exists for these filters (preserves context on refresh).
       let selectedRoute = null;
-      if (selectRouteId) {
-        selectedRoute = routes.find((r) => (r.Id ?? r.id) === selectRouteId) ?? null;
-      } else if (routes.length > 0 && !skipDefaultRoute) {
+      const targetId = selectRouteId ?? get().routeId;
+      if (targetId) {
+        selectedRoute = routes.find((r) => (r.Id ?? r.id) === targetId) ?? null;
+      }
+      if (!selectedRoute && routes.length > 0 && !skipDefaultRoute) {
         selectedRoute = routes[0];
       }
 
@@ -96,13 +100,9 @@ const routingSlice = (set, get) => ({
       });
 
       get().setLayerData('routes', routes, false);
-      if (selectRouteId && selectedRoute) {
-        get().selectRoute(selectRouteId);
-      } else if (routes.length > 0 && !skipDefaultRoute) {
-        const hidden = {};
-        routes.forEach((r, i) => { if (i > 0) hidden[r.Id ?? r.id] = true; });
-        set({ hiddenRouteIds: hidden });
-      } else if (skipDefaultRoute) {
+      if (selectedRoute) {
+        get().selectRoute(selectedRoute.Id ?? selectedRoute.id);
+      } else {
         set({ hiddenRouteIds: {} });
       }
 

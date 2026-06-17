@@ -152,7 +152,7 @@ router.get('/route-logs/:googleRouteId', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
   const id = req.params.googleRouteId;
   const result = await conn.query(
-    `SELECT Id, Name, Account__c, Account__r.Name, Type__c, Reason__c, Confidence__c, Status__c, Skill__c, Accepted_By__c, Accepted_Date__c, CreatedDate,
+    `SELECT Id, Name, Account__c, Account__r.Name, Account__r.MALatitude__c, Account__r.MALongitude__c, Type__c, Reason__c, Confidence__c, Status__c, Skill__c, Accepted_By__c, Accepted_Date__c, CreatedDate,
             (SELECT Id FROM Comments__r)
      FROM RouteLog__c WHERE Google_Route__c = '${id}' ORDER BY CreatedDate DESC LIMIT 100`
   );

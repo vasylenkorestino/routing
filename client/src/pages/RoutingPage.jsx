@@ -42,7 +42,7 @@ function RightPanel() {
 
       {route && !isEdit && (
         <div className="shrink-0 px-3 pt-2">
-          <RouteLogsPanel googleRouteId={route.Id} />
+          <RouteLogsPanel googleRouteId={route.Id} routeName={route.Name} />
         </div>
       )}
 
