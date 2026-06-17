@@ -7,8 +7,81 @@ import Spinner from '../ui/Spinner';
 import ErrorLogsPanel from '../ui/ErrorLogsPanel';
 import ActionLogsPanel from '../ui/ActionLogsPanel';
 import BellMenu from '../notifications/BellMenu';
+import { useIsMobile } from '../../hooks/useMediaQuery';
+import logoUrl from '../../assets/eazygrease-logo.png';
 
-/** Top toolbar — date, filters, actions, layout toggle, user menu */
+const ICON_BTN = 'h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition';
+
+/** Brand logo shown on the far-left of the header. */
+function Logo() {
+  return (
+    <img src={logoUrl} alt="Eazy Grease" className="h-7 md:h-8 w-auto rounded-md select-none shrink-0" draggable={false} />
+  );
+}
+
+/** Refresh button — reloads routes using the current filter selections. */
+function RefreshButton({ onClick, loading }) {
+  return (
+    <button className={`${ICON_BTN} disabled:opacity-50`} title="Refresh" onClick={onClick} disabled={loading}>
+      {loading ? (
+        <Spinner size="sm" />
+      ) : (
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/** Admin / settings gear — only rendered for admin users. */
+function SettingsButton({ onClick }) {
+  return (
+    <button className={`${ICON_BTN} hover:text-primary`} title="Settings" onClick={onClick}>
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+    </button>
+  );
+}
+
+/** Primary "New route" button. */
+function NewButton({ onClick }) {
+  return (
+    <button className="h-8 px-3 rounded-lg bg-primary text-white text-[13px] font-medium hover:bg-primary-hover transition shrink-0" onClick={onClick}>
+      + New
+    </button>
+  );
+}
+
+/** "AI Generate" button. */
+function AIGenerateButton({ onClick }) {
+  return (
+    <button className="h-8 px-3 rounded-lg bg-ai text-white text-[13px] font-medium hover:bg-ai-hover transition flex items-center gap-1 shrink-0" onClick={onClick}>
+      <span className="text-xs">✦</span> AI Generate
+    </button>
+  );
+}
+
+/** Generation-progress toggle — only visible while a job is running/finished. */
+function ProgressButton({ genStatus, genPanelOpen, onClick }) {
+  if (genStatus === 'idle') return null;
+  return (
+    <button
+      className={`h-8 px-2.5 rounded-lg border text-[13px] font-medium transition flex items-center gap-1.5 shrink-0 ${genPanelOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
+      title="AI Generation progress"
+      onClick={onClick}
+    >
+      {genStatus === 'running'
+        ? <span className="w-3.5 h-3.5 border-2 border-ai border-t-transparent rounded-full animate-spin inline-block" />
+        : <span className={`w-2 h-2 rounded-full ${genStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`} />}
+      Progress
+    </button>
+  );
+}
+
+/** Top toolbar — brand, filters, actions, layout toggle, user menu. */
 export default function Header() {
   const serviceDate = useStore((st) => st.serviceDate);
   const setServiceDate = useStore((st) => st.setServiceDate);
@@ -38,119 +111,112 @@ export default function Header() {
   const closeActionLogs = useCallback(() => setActionLogsOpen(false), []);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
 
   const modeIcons = { mapOnly: '🗺', split: '◫', listOnly: '☰' };
-
   const recordTypeOptions = recordTypes.map((rt) => ({ value: rt, label: rt }));
-
   const locationOptions = [
     { value: '', label: 'All Locations' },
     ...serviceLocations.map((loc) => ({ value: loc.Id, label: loc.Name })),
   ];
-
   const routeOptions = [
     { value: '', label: 'All Routes' },
     ...routes.map((r) => ({ value: r.Id ?? r.id, label: r.Name })),
   ];
 
-  return (
-    <header className="flex flex-wrap md:flex-nowrap items-center gap-2 px-3 py-1.5 bg-surface border-b border-border shrink-0 min-h-12 md:h-12 z-10">
-      {/* Filters */}
-      <div className="flex flex-wrap md:flex-nowrap items-center gap-1.5 max-w-full">
-        {/* Mobile-only filters toggle */}
-        <button
-          className="md:hidden h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition shrink-0"
-          onClick={() => setFiltersOpen((o) => !o)}
-          title="Filters"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M6 12h12m-9 6h6" />
-          </svg>
-        </button>
+  const routesSelect = (
+    <Select
+      value={routeId || ''}
+      onChange={(v) => selectRoute(v || null)}
+      options={routeOptions}
+      placeholder="All Routes"
+      searchable
+      className="min-w-[130px]"
+    />
+  );
 
-        {/* Routes — always visible */}
-        <Select
-          value={routeId || ''}
-          onChange={(v) => selectRoute(v || null)}
-          options={routeOptions}
-          placeholder="All Routes"
-          searchable
-          className="min-w-[130px]"
-        />
+  const advancedFilters = (
+    <>
+      <DatePicker value={serviceDate} onChange={setServiceDate} />
+      <Select value={recordType} onChange={setRecordType} options={recordTypeOptions} placeholder="Record Type" />
+      <Select
+        value={serviceLocation || ''}
+        onChange={(v) => setServiceLocation(v || null)}
+        options={locationOptions}
+        placeholder="All Locations"
+        searchable
+      />
+    </>
+  );
 
-        {/* Date / Record Type / Location — inline on desktop, collapsible on mobile */}
-        <div className={`${filtersOpen ? 'flex' : 'hidden'} md:flex items-center gap-1.5 basis-full md:basis-auto order-last md:order-none`}>
-          <DatePicker value={serviceDate} onChange={setServiceDate} />
-          <Select
-            value={recordType}
-            onChange={setRecordType}
-            options={recordTypeOptions}
-            placeholder="Record Type"
-          />
-          <Select
-            value={serviceLocation || ''}
-            onChange={(v) => setServiceLocation(v || null)}
-            options={locationOptions}
-            placeholder="All Locations"
-            searchable
-          />
+  const filtersToggle = (
+    <button className={`${ICON_BTN} shrink-0`} onClick={() => setFiltersOpen((o) => !o)} title="Filters">
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M6 12h12m-9 6h6" />
+      </svg>
+    </button>
+  );
+
+  // --- Mobile: two rows ---
+  if (isMobile) {
+    return (
+      <header className="flex flex-col gap-1.5 px-3 py-1.5 bg-surface border-b border-border shrink-0 z-10">
+        {/* Row 1: logo (left) — refresh, notifications, settings (right) */}
+        <div className="flex items-center gap-2">
+          <Logo />
+          <div className="flex-1" />
+          <RefreshButton onClick={() => refreshRoutes()} loading={isLoading} />
+          <BellMenu />
+          {driver?.isAdmin && <SettingsButton onClick={() => navigate('/admin')} />}
         </div>
+
+        {/* Row 2: filters, routes, new, ai generate */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {filtersToggle}
+          {routesSelect}
+          <NewButton onClick={() => openModal('isNew')} />
+          <AIGenerateButton onClick={() => openModal('isAIGenerate')} />
+          <ProgressButton genStatus={genStatus} genPanelOpen={genPanelOpen} onClick={toggleGenPanel} />
+          {filtersOpen && (
+            <div className="flex flex-wrap items-center gap-1.5 basis-full">
+              {advancedFilters}
+            </div>
+          )}
+        </div>
+
+        <ActionLogsPanel open={actionLogsOpen} onClose={closeActionLogs} />
+        <ErrorLogsPanel open={logsOpen} onClose={closeLogs} />
+      </header>
+    );
+  }
+
+  // --- Desktop: single row ---
+  return (
+    <header className="flex items-center gap-2 px-3 py-1.5 bg-surface border-b border-border shrink-0 h-12 z-10">
+      <Logo />
+
+      {/* Filters */}
+      <div className="flex items-center gap-1.5">
+        {advancedFilters}
+        {routesSelect}
       </div>
 
       {/* Actions */}
       <div className="flex items-center gap-1.5">
-        <button
-          className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition disabled:opacity-50"
-          title="Refresh"
-          onClick={() => refreshRoutes()}
-          disabled={isLoading}
-        >
-          {isLoading ? (
-            <Spinner size="sm" />
-          ) : (
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
-            </svg>
-          )}
-        </button>
-        <button
-          className="h-8 px-3 rounded-lg bg-primary text-white text-[13px] font-medium hover:bg-primary-hover transition"
-          onClick={() => openModal('isNew')}
-        >
-          + New
-        </button>
-        <button
-          className="h-8 px-3 rounded-lg bg-ai text-white text-[13px] font-medium hover:bg-ai-hover transition flex items-center gap-1"
-          onClick={() => openModal('isAIGenerate')}
-        >
-          <span className="text-xs">✦</span> AI Generate
-        </button>
-        {genStatus !== 'idle' && (
-          <button
-            className={`h-8 px-2.5 rounded-lg border text-[13px] font-medium transition flex items-center gap-1.5 ${genPanelOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
-            title="AI Generation progress"
-            onClick={toggleGenPanel}
-          >
-            {genStatus === 'running'
-              ? <span className="w-3.5 h-3.5 border-2 border-ai border-t-transparent rounded-full animate-spin inline-block" />
-              : <span className={`w-2 h-2 rounded-full ${genStatus === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`} />}
-            Progress
-          </button>
-        )}
+        <RefreshButton onClick={() => refreshRoutes()} loading={isLoading} />
+        <NewButton onClick={() => openModal('isNew')} />
+        <AIGenerateButton onClick={() => openModal('isAIGenerate')} />
+        <ProgressButton genStatus={genStatus} genPanelOpen={genPanelOpen} onClick={toggleGenPanel} />
       </div>
 
-      <div className="hidden md:block flex-1" />
+      <div className="flex-1" />
 
-      {/* Layout toggle — desktop only (mobile uses the bottom tab bar) */}
-      <div className="hidden md:inline-flex rounded-lg border border-border overflow-hidden">
+      {/* Layout toggle */}
+      <div className="inline-flex rounded-lg border border-border overflow-hidden">
         {Object.entries(modeIcons).map(([mode, icon]) => (
           <button
             key={mode}
-            className={`h-8 px-2.5 text-xs border-none transition ${
-              panelMode === mode
-                ? 'bg-primary text-white'
-                : 'bg-surface text-txt-secondary hover:bg-bg'
-            }`}
+            className={`h-8 px-2.5 text-xs border-none transition ${panelMode === mode ? 'bg-primary text-white' : 'bg-surface text-txt-secondary hover:bg-bg'}`}
             onClick={() => setPanelMode(mode)}
             title={mode}
           >
@@ -159,11 +225,11 @@ export default function Header() {
         ))}
       </div>
 
-      {/* Bell + Action logs + Error logs + User */}
-      <div className="flex items-center gap-2 md:ml-2">
+      {/* Bell + Action logs + Error logs + Settings + User */}
+      <div className="flex items-center gap-2 ml-2">
         <BellMenu />
         <button
-          className={`hidden md:flex h-8 w-8 items-center justify-center rounded-lg border transition ${actionLogsOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
+          className={`h-8 w-8 flex items-center justify-center rounded-lg border transition ${actionLogsOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
           title="Action Logs"
           onClick={toggleActionLogs}
         >
@@ -172,7 +238,7 @@ export default function Header() {
           </svg>
         </button>
         <button
-          className={`hidden md:flex h-8 w-8 items-center justify-center rounded-lg border transition ${logsOpen ? 'border-error bg-error-bg text-error' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
+          className={`h-8 w-8 flex items-center justify-center rounded-lg border transition ${logsOpen ? 'border-error bg-error-bg text-error' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
           title="Error Logs"
           onClick={toggleLogs}
         >
@@ -180,23 +246,12 @@ export default function Header() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 12.75c1.148 0 2.278.08 3.383.237 1.037.146 1.866.966 1.866 2.013 0 3.728-2.35 6.75-5.25 6.75S6.75 18.728 6.75 15c0-1.046.83-1.867 1.866-2.013A24.204 24.204 0 0112 12.75zm0 0c2.883 0 5.647.508 8.207 1.44a23.91 23.91 0 01-1.152-6.135 23.881 23.881 0 01.117-2.68c.057-.58-.462-1.075-1.044-1.075H5.872c-.582 0-1.1.495-1.044 1.075.063.653.098 1.315.098 1.98 0 2.071-.376 4.053-1.065 5.89A23.97 23.97 0 0012 12.75zM9 6V4.5A2.25 2.25 0 0111.25 2.25h1.5A2.25 2.25 0 0115 4.5V6" />
           </svg>
         </button>
-        {driver?.isAdmin && (
-          <button
-            className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-primary transition"
-            title="Admin Panel"
-            onClick={() => navigate('/admin')}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-        )}
-        <div className="flex items-center gap-1.5 px-1.5 md:px-2 py-1 rounded-lg bg-bg">
+        {driver?.isAdmin && <SettingsButton onClick={() => navigate('/admin')} />}
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-bg">
           <div className="w-6 h-6 rounded-full bg-primary-light text-primary text-[10px] font-bold flex items-center justify-center">
             {(driver?.name || 'U').charAt(0).toUpperCase()}
           </div>
-          <span className="hidden md:inline text-[13px] text-txt font-medium max-w-[100px] truncate">
+          <span className="text-[13px] text-txt font-medium max-w-[100px] truncate">
             {driver?.name || 'User'}
           </span>
         </div>
