@@ -36,6 +36,7 @@ export default function Header() {
   const [actionLogsOpen, setActionLogsOpen] = useState(false);
   const toggleActionLogs = useCallback(() => { setActionLogsOpen((p) => !p); setLogsOpen(false); }, []);
   const closeActionLogs = useCallback(() => setActionLogsOpen(false), []);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const navigate = useNavigate();
 
   const modeIcons = { mapOnly: '🗺', split: '◫', listOnly: '☰' };
@@ -55,29 +56,45 @@ export default function Header() {
   return (
     <header className="flex flex-wrap md:flex-nowrap items-center gap-2 px-3 py-1.5 bg-surface border-b border-border shrink-0 min-h-12 md:h-12 z-10">
       {/* Filters */}
-      <div className="flex items-center gap-1.5 overflow-x-auto max-w-full">
-        <DatePicker value={serviceDate} onChange={setServiceDate} />
-        <Select
-          value={recordType}
-          onChange={setRecordType}
-          options={recordTypeOptions}
-          placeholder="Record Type"
-        />
-        <Select
-          value={serviceLocation || ''}
-          onChange={(v) => setServiceLocation(v || null)}
-          options={locationOptions}
-          placeholder="All Locations"
-          searchable
-        />
+      <div className="flex flex-wrap md:flex-nowrap items-center gap-1.5 max-w-full">
+        {/* Mobile-only filters toggle */}
+        <button
+          className="md:hidden h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition shrink-0"
+          onClick={() => setFiltersOpen((o) => !o)}
+          title="Filters"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M6 12h12m-9 6h6" />
+          </svg>
+        </button>
+
+        {/* Routes — always visible */}
         <Select
           value={routeId || ''}
           onChange={(v) => selectRoute(v || null)}
           options={routeOptions}
           placeholder="All Routes"
           searchable
-          className="min-w-[140px]"
+          className="min-w-[130px]"
         />
+
+        {/* Date / Record Type / Location — inline on desktop, collapsible on mobile */}
+        <div className={`${filtersOpen ? 'flex' : 'hidden'} md:flex items-center gap-1.5 basis-full md:basis-auto order-last md:order-none`}>
+          <DatePicker value={serviceDate} onChange={setServiceDate} />
+          <Select
+            value={recordType}
+            onChange={setRecordType}
+            options={recordTypeOptions}
+            placeholder="Record Type"
+          />
+          <Select
+            value={serviceLocation || ''}
+            onChange={(v) => setServiceLocation(v || null)}
+            options={locationOptions}
+            placeholder="All Locations"
+            searchable
+          />
+        </div>
       </div>
 
       {/* Actions */}
@@ -122,7 +139,7 @@ export default function Header() {
         )}
       </div>
 
-      <div className="flex-1" />
+      <div className="hidden md:block flex-1" />
 
       {/* Layout toggle — desktop only (mobile uses the bottom tab bar) */}
       <div className="hidden md:inline-flex rounded-lg border border-border overflow-hidden">
@@ -143,10 +160,10 @@ export default function Header() {
       </div>
 
       {/* Bell + Action logs + Error logs + User */}
-      <div className="flex items-center gap-2 ml-2">
+      <div className="flex items-center gap-2 md:ml-2">
         <BellMenu />
         <button
-          className={`h-8 w-8 flex items-center justify-center rounded-lg border transition ${actionLogsOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
+          className={`hidden md:flex h-8 w-8 items-center justify-center rounded-lg border transition ${actionLogsOpen ? 'border-ai bg-ai/10 text-ai' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
           title="Action Logs"
           onClick={toggleActionLogs}
         >
@@ -155,7 +172,7 @@ export default function Header() {
           </svg>
         </button>
         <button
-          className={`h-8 w-8 flex items-center justify-center rounded-lg border transition ${logsOpen ? 'border-error bg-error-bg text-error' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
+          className={`hidden md:flex h-8 w-8 items-center justify-center rounded-lg border transition ${logsOpen ? 'border-error bg-error-bg text-error' : 'border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt'}`}
           title="Error Logs"
           onClick={toggleLogs}
         >
@@ -175,11 +192,11 @@ export default function Header() {
             </svg>
           </button>
         )}
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-bg">
+        <div className="flex items-center gap-1.5 px-1.5 md:px-2 py-1 rounded-lg bg-bg">
           <div className="w-6 h-6 rounded-full bg-primary-light text-primary text-[10px] font-bold flex items-center justify-center">
             {(driver?.name || 'U').charAt(0).toUpperCase()}
           </div>
-          <span className="text-[13px] text-txt font-medium max-w-[100px] truncate">
+          <span className="hidden md:inline text-[13px] text-txt font-medium max-w-[100px] truncate">
             {driver?.name || 'User'}
           </span>
         </div>

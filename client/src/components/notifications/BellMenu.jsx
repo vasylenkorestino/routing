@@ -134,7 +134,7 @@ export default function BellMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-10 w-[420px] max-h-[560px] overflow-hidden bg-surface border border-border rounded-xl shadow-2xl z-30 flex flex-col">
+        <div className="fixed inset-x-2 top-14 w-auto max-h-[75vh] sm:absolute sm:inset-x-auto sm:right-0 sm:top-10 sm:w-[420px] sm:max-h-[560px] overflow-hidden bg-surface border border-border rounded-xl shadow-2xl z-[60] flex flex-col">
           <div className="flex items-center justify-between px-3 py-2.5 border-b border-border">
             <div className="flex items-center gap-2">
               <span className="text-[13px] font-semibold text-txt">Notifications</span>

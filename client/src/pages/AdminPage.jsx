@@ -151,17 +151,17 @@ export default function AdminPage() {
         <button className="h-8 px-2.5 rounded-lg border border-error/30 bg-surface text-error text-xs font-medium hover:bg-error-bg transition cursor-pointer" onClick={logout}>Logout</button>
       </header>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-3 sm:p-6">
         <div className="max-w-6xl mx-auto">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <div>
               <h2 className="text-lg font-bold text-txt">Users</h2>
               <p className="text-xs text-txt-secondary mt-0.5">{users.length} RoutingUser records</p>
             </div>
             <div className="flex items-center gap-2">
-              <div className="relative">
+              <div className="relative flex-1 sm:flex-none">
                 <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-txt-secondary pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>
-                <input className="h-8 w-56 pl-8 pr-3 rounded-lg border border-border bg-bg text-txt text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary-light transition" placeholder="Search by name or email..." value={search} onChange={(e) => setSearch(e.target.value)} />
+                <input className="h-8 w-full sm:w-56 pl-8 pr-3 rounded-lg border border-border bg-bg text-txt text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary-light transition" placeholder="Search by name or email..." value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
               <button onClick={fetchUsers} disabled={loading} className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-surface text-txt-secondary hover:bg-bg hover:text-txt transition disabled:opacity-50 cursor-pointer" title="Refresh">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg>
@@ -178,8 +178,8 @@ export default function AdminPage() {
           ) : filtered.length === 0 ? (
             <div className="flex items-center justify-center py-20 text-sm text-txt-secondary">{search ? 'No users match your search' : 'No users found'}</div>
           ) : (
-            <div className="bg-surface border border-border rounded-xl overflow-hidden">
-              <table className="w-full text-left">
+            <div className="bg-surface border border-border rounded-xl overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left">
                 <thead>
                   <tr className="border-b border-border bg-bg/50">
                     <th className="px-4 py-2.5 text-[11px] font-semibold text-txt-secondary uppercase tracking-wide">Name</th>

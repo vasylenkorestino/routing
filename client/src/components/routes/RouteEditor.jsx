@@ -184,8 +184,8 @@ export default function RouteEditor() {
       {/* Fixed header section */}
       <div className="shrink-0 flex flex-col gap-2.5 p-4 bg-surface border border-border rounded-xl shadow-sm mx-1 mb-2">
         {/* Title row */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
             <button
               className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-bg text-txt-secondary hover:text-primary transition"
               onClick={() => closeModal('isEdit')}
@@ -197,14 +197,14 @@ export default function RouteEditor() {
             </button>
             <div className="w-3 h-3 rounded-sm shrink-0" style={{ background: color }} />
             <input
-              className="text-[15px] font-semibold text-txt bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none transition px-0.5 -mx-0.5 w-48"
+              className="text-[15px] font-semibold text-txt bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none transition px-0.5 -mx-0.5 min-w-0 flex-1 sm:flex-none sm:w-48"
               value={name}
               onChange={(e) => setName(e.target.value)}
               title="Route Name"
             />
             <span className="text-xs text-txt-secondary bg-bg px-2 py-0.5 rounded tabular-nums">{waypoints.length} stops</span>
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex gap-1.5 shrink-0">
             <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => closeModal('isEdit')}>Cancel</button>
             <button className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-hover transition disabled:opacity-50" onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : 'Save & Optimize'}
