@@ -272,10 +272,12 @@ export default function RouteComparePanel() {
               </div>
             </div>
 
-            {/* Difference sections */}
-            <AccountSection title="In all selected routes" tone="text-success" accounts={sections.inAll} onPick={openDetail} />
-            <AccountSection title="Only in current route" tone="text-primary" dot={currentColor} accounts={sections.onlyCurrent} onPick={openDetail} />
-            <AccountSection title="Only in comparison routes" tone="text-ai" accounts={sections.onlyComparison} onPick={openDetail} />
+            {/* Difference sections — side by side */}
+            <div className="grid grid-cols-3 gap-3">
+              <AccountSection title="In all selected routes" tone="text-success" accounts={sections.inAll} onPick={openDetail} />
+              <AccountSection title="Only in current route" tone="text-primary" dot={currentColor} accounts={sections.onlyCurrent} onPick={openDetail} />
+              <AccountSection title="Only in comparison routes" tone="text-ai" accounts={sections.onlyComparison} onPick={openDetail} />
+            </div>
 
             {/* Route-specific breakdown */}
             {sections.partial.length > 0 && (
