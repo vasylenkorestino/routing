@@ -138,7 +138,7 @@ router.get('/jobs/:id', (req, res) => {
 
 /**
  * POST /api/generate-routes/jobs/:id/commit
- * Creates the selected preview routes in Salesforce (isAI__c=true, isInherit__c=false,
+ * Creates the selected preview routes in Salesforce (isAI__c=true, isInherit__c=true,
  * Custom_Route__c=false) for the job's service date only. Re-validates that accounts
  * are not already routed that day so committing is idempotent.
  * Body: { routeIds?: string[] } — omit to commit all routes.

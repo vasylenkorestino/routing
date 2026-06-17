@@ -9,7 +9,7 @@ class RouteGenerationSkill extends BaseSkill {
       description:
         'Create new routes in Salesforce. Accepts a list of route definitions, each with a name, ' +
         'service date, record type, service location (depot), and ordered list of account IDs. ' +
-        'Creates Google_Route__c (header) and Route__c (stops) records with isAI__c = true. ' +
+        'Creates Google_Route__c (header) and Route__c (stops) records with isAI__c = true and isInherit__c = true. ' +
         'The service location is the start and end point for the route.',
       inputSchema: {
         type: 'object',
@@ -61,7 +61,7 @@ class RouteGenerationSkill extends BaseSkill {
       Service_Location_End__c: r.serviceLocationId || null,
       isAI__c: true,
       isAIApproved__c: false,
-      isInherit__c: false,
+      isInherit__c: true,
       Custom_Route__c: false,
       Accounts__c: r.accountIds.join(','),
     }));
