@@ -156,10 +156,13 @@ export default function RouteComparePanel() {
         <button onClick={closeCompare} className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition shrink-0">Close</button>
       </div>
 
-      <div className="flex-1 overflow-auto p-3 flex flex-col gap-3">
-        {/* Candidate selector */}
-        <div className="border border-border rounded-lg overflow-hidden">
-          <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2">
+      <div className="flex-1 flex flex-col md:flex-row min-h-0">
+        {/* Left sidebar — route list + search */}
+        <div className="w-full md:w-[360px] shrink-0 border-b md:border-b-0 md:border-r border-border flex flex-col min-h-0 max-md:max-h-[40vh]">
+          <div className="px-3 py-2 border-b border-border shrink-0 bg-bg/40">
+            <span className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wide">Routes</span>
+          </div>
+          <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 shrink-0">
             <button
               className="flex items-center gap-1.5 text-[11px] font-medium text-txt-secondary hover:text-txt transition"
               onClick={() => setAdvancedOpen((o) => !o)}
@@ -177,7 +180,7 @@ export default function RouteComparePanel() {
           </div>
 
           {advancedOpen && (
-            <div className="px-3 py-2 border-b border-border grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="px-3 py-2 border-b border-border grid grid-cols-1 gap-2 shrink-0">
               <Field label="Route Name">
                 <input className="input-field" value={filterName} onChange={(e) => setFilterName(e.target.value)} placeholder="Exact route name" />
               </Field>
@@ -194,7 +197,7 @@ export default function RouteComparePanel() {
             </div>
           )}
 
-          <div className="max-h-48 overflow-auto">
+          <div className="flex-1 overflow-auto min-h-0">
             {loading ? (
               <div className="flex items-center justify-center py-8 gap-2"><Spinner size="sm" /><span className="text-[12px] text-txt-secondary">Loading…</span></div>
             ) : list.length === 0 ? (
@@ -224,93 +227,96 @@ export default function RouteComparePanel() {
           </div>
         </div>
 
-        {!hasComparison ? (
-          <div className="flex-1 flex items-center justify-center text-[12px] text-txt-secondary text-center px-6">
-            Select one or more routes above to compare. Every selected route is drawn on the map in its own colour.
-          </div>
-        ) : (
-          <>
-            {/* Single summary table — one row per route, metrics shown once */}
-            <Section title="Summary">
-              <div className="overflow-auto">
-                <table className="w-full text-[12px]">
-                  <thead>
-                    <tr className="text-[10px] uppercase tracking-wide text-txt-secondary border-b border-border/60">
-                      <th className="text-left font-semibold px-3 py-1.5">Route</th>
-                      <th className="text-right font-semibold px-2 py-1.5">Stops</th>
-                      <th className="text-right font-semibold px-2 py-1.5">Distance</th>
-                      <th className="text-right font-semibold px-2 py-1.5">Time</th>
-                      <th className="text-right font-semibold px-2 py-1.5">Gallons</th>
-                      <th className="text-right font-semibold px-2 py-1.5">Done</th>
-                      <th className="text-right font-semibold px-2 py-1.5">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {allRoutes.map(({ key, name, color, isCurrent }) => {
-                      const m = routeMetrics(key === CURRENT_KEY ? route : compareRoutes.find((c) => (c.Id ?? c.id) === key));
-                      return (
-                        <tr key={key} className={isCurrent ? 'bg-primary/5' : ''}>
-                          <td className="px-3 py-1.5">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />
-                              <span className="truncate text-txt font-medium">{name}</span>
-                              {isCurrent && <span className="text-[9px] text-primary font-semibold shrink-0">(current)</span>}
-                            </div>
-                          </td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.stops}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.distance}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.time}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.gallons}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.completion}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-txt-secondary">{m.date}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </Section>
-
-            {/* Difference sections — side by side on larger screens, stacked on mobile */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <AccountSection title="In all selected routes" tone="text-success" accounts={sections.inAll} onPick={openDetail} />
-              <AccountSection title="Only in current route" tone="text-primary" dot={currentColor} accounts={sections.onlyCurrent} onPick={openDetail} />
-              <AccountSection title="Only in comparison routes" tone="text-ai" accounts={sections.onlyComparison} onPick={openDetail} />
+        {/* Right main — comparison output */}
+        <div className="flex-1 flex flex-col min-h-0 overflow-auto p-3 gap-3">
+          {!hasComparison ? (
+            <div className="flex-1 flex items-center justify-center text-[12px] text-txt-secondary text-center px-6">
+              Select one or more routes from the list on the left to compare. Every selected route is drawn on the map in its own colour.
             </div>
-
-            {/* Route-specific breakdown */}
-            {sections.partial.length > 0 && (
-              <Section title="Route-specific differences" count={sections.partial.length}>
-                <div className="max-h-64 overflow-auto divide-y divide-border/40">
-                  {sections.partial.map((a) => (
-                    <div key={a.id} className="flex items-center gap-2 px-3 py-1.5">
-                      <button className="text-[11px] text-txt hover:text-primary hover:underline truncate flex-1 text-left" onClick={() => openDetail(a)}>{a.name}</button>
-                      <div className="flex flex-wrap gap-1 justify-end shrink-0">
-                        {allRoutes.filter((r) => a.keys.has(r.key)).map((r) => (
-                          <span key={r.key} className="inline-flex items-center gap-1 text-[9px] font-medium text-txt-secondary bg-bg rounded px-1.5 py-0.5 max-w-[120px]" title={r.name}>
-                            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: r.color }} />
-                            <span className="truncate">{r.isCurrent ? 'Current' : r.name}</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+          ) : (
+            <>
+              {/* Single summary table — one row per route, metrics shown once */}
+              <Section title="Summary">
+                <div className="overflow-auto">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wide text-txt-secondary border-b border-border/60">
+                        <th className="text-left font-semibold px-3 py-1.5">Route</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Stops</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Distance</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Time</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Gallons</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Done</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50">
+                      {allRoutes.map(({ key, name, color, isCurrent }) => {
+                        const m = routeMetrics(key === CURRENT_KEY ? route : compareRoutes.find((c) => (c.Id ?? c.id) === key));
+                        return (
+                          <tr key={key} className={isCurrent ? 'bg-primary/5' : ''}>
+                            <td className="px-3 py-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />
+                                <span className="truncate text-txt font-medium">{name}</span>
+                                {isCurrent && <span className="text-[9px] text-primary font-semibold shrink-0">(current)</span>}
+                              </div>
+                            </td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.stops}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.distance}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.time}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.gallons}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.completion}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt-secondary">{m.date}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </Section>
-            )}
-          </>
-        )}
 
-        {/* Last Services for a clicked account/stop */}
-        {compareDetail?.accountId && (
-          <div className="border border-border rounded-lg overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-1.5 bg-bg/50 border-b border-border">
-              <span className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wide">Service history</span>
-              <button className="text-txt-secondary hover:text-error text-sm leading-none" onClick={() => setCompareDetail(null)}>×</button>
+              {/* Difference sections — side by side on larger screens, stacked on mobile */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <AccountSection title="In all selected routes" tone="text-success" accounts={sections.inAll} onPick={openDetail} />
+                <AccountSection title="Only in current route" tone="text-primary" dot={currentColor} accounts={sections.onlyCurrent} onPick={openDetail} />
+                <AccountSection title="Only in comparison routes" tone="text-ai" accounts={sections.onlyComparison} onPick={openDetail} />
+              </div>
+
+              {/* Route-specific breakdown */}
+              {sections.partial.length > 0 && (
+                <Section title="Route-specific differences" count={sections.partial.length}>
+                  <div className="max-h-64 overflow-auto divide-y divide-border/40">
+                    {sections.partial.map((a) => (
+                      <div key={a.id} className="flex items-center gap-2 px-3 py-1.5">
+                        <button className="text-[11px] text-txt hover:text-primary hover:underline truncate flex-1 text-left" onClick={() => openDetail(a)}>{a.name}</button>
+                        <div className="flex flex-wrap gap-1 justify-end shrink-0">
+                          {allRoutes.filter((r) => a.keys.has(r.key)).map((r) => (
+                            <span key={r.key} className="inline-flex items-center gap-1 text-[9px] font-medium text-txt-secondary bg-bg rounded px-1.5 py-0.5 max-w-[120px]" title={r.name}>
+                              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: r.color }} />
+                              <span className="truncate">{r.isCurrent ? 'Current' : r.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              )}
+            </>
+          )}
+
+          {/* Last Services for a clicked account/stop */}
+          {compareDetail?.accountId && (
+            <div className="border border-border rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-1.5 bg-bg/50 border-b border-border">
+                <span className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wide">Service history</span>
+                <button className="text-txt-secondary hover:text-error text-sm leading-none" onClick={() => setCompareDetail(null)}>×</button>
+              </div>
+              <LastServices accountId={compareDetail.accountId} accountName={compareDetail.accountName} />
             </div>
-            <LastServices accountId={compareDetail.accountId} accountName={compareDetail.accountName} />
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -343,7 +349,7 @@ function Section({ title, tone = 'text-txt-secondary', dot, count, children }) {
 function AccountSection({ title, tone, dot, accounts, onPick }) {
   return (
     <Section title={title} tone={tone} dot={dot} count={accounts.length}>
-      <div className="max-h-40 overflow-auto divide-y divide-border/40">
+      <div className="max-h-56 overflow-auto divide-y divide-border/40">
         {accounts.length === 0 ? (
           <div className="text-[11px] text-txt-secondary px-3 py-2">None</div>
         ) : (
