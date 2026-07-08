@@ -184,19 +184,19 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     applyResolutions([{ logId: log.Id, outcome }]);
   };
 
-  /** Bulk approve/decline applied to selected (or all visible pending). */
-  const bulkDecide = (decision) => {
+  /**
+   * Bulk keep/remove applied to selected (or all visible pending). Works for
+   * every flag — including FLAG/OVERFLOW — by resolving each log against its
+   * route membership: keep → keep/add (Accepted), remove → remove/ignore (Declined).
+   */
+  const bulkResolve = (kind) => {
     const targets = selected.size > 0 ? pendingVisible.filter((l) => selected.has(l.Id)) : pendingVisible;
-    const items = [];
-    let needsManual = 0;
-    targets.forEach((l) => {
-      const outcome = decide(l.flag, decision);
-      if (outcome) items.push({ logId: l.Id, outcome });
-      else needsManual += 1;
+    const items = targets.map((l) => {
+      const inRoute = !!l.Account__c && routeAccountIds.has(l.Account__c);
+      const outcome = kind === 'keep' ? (inRoute ? 'keep' : 'add') : (inRoute ? 'remove' : 'ignore');
+      return { logId: l.Id, outcome };
     });
-    if (!items.length && needsManual) { toast.error(`${needsManual} flagged log(s) need a manual decision`); return; }
     applyResolutions(items);
-    if (needsManual) toast.error(`${needsManual} flagged log(s) skipped — resolve them manually`);
   };
 
   const selectedCount = selected.size;
@@ -314,16 +314,16 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
                 <button
                   className="h-7 px-3 rounded-md bg-success text-white text-[11px] font-medium hover:bg-success/90 transition disabled:opacity-40"
                   disabled={pendingVisible.length === 0}
-                  onClick={() => bulkDecide('approve')}
+                  onClick={() => bulkResolve('keep')}
                 >
-                  Approve All
+                  Keep All{selectedCount > 0 ? ' (Selected)' : ''}
                 </button>
                 <button
                   className="h-7 px-3 rounded-md bg-error text-white text-[11px] font-medium hover:bg-error/90 transition disabled:opacity-40"
                   disabled={pendingVisible.length === 0}
-                  onClick={() => bulkDecide('decline')}
+                  onClick={() => bulkResolve('remove')}
                 >
-                  Decline All
+                  Remove All{selectedCount > 0 ? ' (Selected)' : ''}
                 </button>
               </div>
             </div>
@@ -362,8 +362,8 @@ function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, 
   const approveOutcome = decide(log.flag, 'approve');
   const declineOutcome = decide(log.flag, 'decline');
   const clickable = !!log.Account__c;
-  // Already a stop → keep/remove; not a stop → add. Ignore is always valid.
-  const resolutionKeys = inRoute ? ['keep', 'remove', 'ignore'] : ['add', 'ignore'];
+  // Already a stop → keep/remove; not a stop → add.
+  const resolutionKeys = inRoute ? ['keep', 'remove'] : ['add'];
 
   return (
     <div className={`rounded-lg border transition ${isPending ? 'border-border bg-surface' : 'border-border/60 bg-bg/40 opacity-70'} ${detailOpen ? 'ring-1 ring-primary/40' : selected ? 'ring-1 ring-primary/20' : ''}`}>

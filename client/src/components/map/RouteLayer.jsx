@@ -100,6 +100,9 @@ function useDrivingPaths(routeId, startPt, endPt, stops, hasPolyline) {
 
   const startKey = startPt ? `${startPt.lat},${startPt.lng}` : '';
   const endKey = endPt ? `${endPt.lat},${endPt.lng}` : '';
+  // Signature of the ordered stop set so the driving-path recomputes (and cache
+  // key changes) whenever a stop is added/removed/reordered — not just on count.
+  const stopsKey = stops.map((s) => s.Id ?? `${s.Latitude__c},${s.Longitude__c}`).join('|');
 
   useEffect(() => {
     setStartPath(null);
@@ -128,13 +131,14 @@ function useDrivingPaths(routeId, startPt, endPt, stops, hasPolyline) {
       const origin = startPt || firstStop;
       const dest = endPt || lastStop;
       const wps = stops.map((s) => ({ lat: Number(s.Latitude__c), lng: Number(s.Longitude__c) }));
-      const key = `f_${routeId}_${startKey}_${endKey}_${stops.length}`;
+      const key = `f_${routeId}_${startKey}_${endKey}_${stopsKey}`;
       if (drivingCache[key]) { setFullPath(drivingCache[key]); }
       else {
         requestDrivingPath(origin, dest, wps).then((p) => { drivingCache[key] = p; setFullPath(p); });
       }
     }
-  }, [routeId, startKey, endKey, stops.length, hasPolyline]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeId, startKey, endKey, stopsKey, hasPolyline]);
 
   return { startPath, endPath, fullPath };
 }

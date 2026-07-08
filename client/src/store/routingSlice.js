@@ -262,6 +262,50 @@ const routingSlice = (set, get) => ({
   },
 
   /**
+   * Clears a route's cached Polyline__c across routes/route/layer data so the
+   * map redraws the path from the current stops (RouteLayer falls back to live,
+   * chunked driving directions). Used after an in-editor add/remove where the
+   * server polyline is stale until the async re-optimization finishes.
+   */
+  invalidateRoutePolyline: (routeId) => {
+    if (!routeId) return;
+    const clear = (r) => (getId(r) === routeId && r.Polyline__c ? { ...r, Polyline__c: null } : r);
+    const routes = (get().routes || []).map(clear);
+    const layers = get().layers;
+    const patch = { routes };
+    if (getId(get().route) === routeId && get().route?.Polyline__c) {
+      patch.route = { ...get().route, Polyline__c: null };
+    }
+    if (layers?.routes) {
+      patch.layers = { ...layers, routes: { ...layers.routes, data: (layers.routes.data || []).map(clear) } };
+    }
+    set(patch);
+  },
+
+  /**
+   * Replaces a route's stops with a client-optimized ordering (each stop's
+   * Priority__c already renumbered by the caller) and drops the stale
+   * Polyline__c so both the list and the map redraw in the new order without a
+   * server callout. Used for the instant add/remove preview in the editor.
+   */
+  applyRouteStopOrder: (routeId, orderedStops) => {
+    if (!routeId || !Array.isArray(orderedStops)) return;
+    const clearPoly = (r) => (r.Polyline__c ? { ...r, Polyline__c: null } : r);
+    const apply = (r) =>
+      getId(r) === routeId ? clearPoly(withPreparedStops(r, orderedStops)) : r;
+    const routes = (get().routes || []).map(apply);
+    const layers = get().layers;
+    const patch = { routes };
+    if (getId(get().route) === routeId) {
+      patch.route = clearPoly(withPreparedStops(get().route, orderedStops));
+    }
+    if (layers?.routes) {
+      patch.layers = { ...layers, routes: { ...layers.routes, data: (layers.routes.data || []).map(apply) } };
+    }
+    set(patch);
+  },
+
+  /**
    * Apply a SF→AWS webhook patch to the in-memory route store. Driven by the
    * `sf-changed` SSE event so the UI reflects Salesforce changes without a
    * full re-fetch. Supports `google_route` (header upsert/delete) and
@@ -333,6 +377,7 @@ function applyRouteStopPatch(set, get, event, record) {
     const updatedParent = withPreparedStops(parent, filtered);
     const next = current.map((r, i) => (i === parentIdx ? updatedParent : r));
     set({ routes: next, route: get().routeId === parentId ? updatedParent : get().route });
+    if (get().setLayerData) get().setLayerData('routes', next);
     return;
   }
 
@@ -342,6 +387,7 @@ function applyRouteStopPatch(set, get, event, record) {
   const updatedParent = withPreparedStops(parent, nextStops);
   const next = current.map((r, i) => (i === parentIdx ? updatedParent : r));
   set({ routes: next, route: get().routeId === parentId ? updatedParent : get().route });
+  if (get().setLayerData) get().setLayerData('routes', next);
 }
 
 /** Map snake/camel webhook fields onto the SF-shaped record kept in store. */

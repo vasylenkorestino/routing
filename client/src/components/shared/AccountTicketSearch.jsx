@@ -74,12 +74,17 @@ export default function AccountTicketSearch({ mode = 'add', onAdd }) {
   }, [term, search]);
 
   const doAdd = async (account, ticketType = '') => {
+    const key = account.Id + ticketType;
     if (mode === 'edit') {
-      onAdd?.({ ...account, _source: ticketType ? 'ticket' : 'account', Description: ticketType });
+      setAdding(key);
+      try {
+        await onAdd?.({ ...account, _source: ticketType ? 'ticket' : 'account', Description: ticketType });
+      } finally {
+        setAdding(null);
+      }
       return;
     }
     if (!routeId) { toast.info('Please select a route first'); return; }
-    const key = account.Id + ticketType;
     setAdding(key);
     try {
       await routingApi.addPoint({ accountId: account.Id, routeId, ticketType });

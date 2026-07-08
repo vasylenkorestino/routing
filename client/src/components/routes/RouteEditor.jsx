@@ -1,14 +1,14 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import useStore from '../../store';
 import * as routingApi from '../../api/routing';
 import { getLastServices } from '../../api/routing';
-import ConfirmModal from '../ui/ConfirmModal';
 import AccountTicketSearch from '../shared/AccountTicketSearch';
 import Select from '../ui/Select';
 import { OverlaySpinner } from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import { optimizeStopOrder } from '../../utils/clientOptimize';
 
 function reorder(list, startIndex, endIndex) {
   const result = Array.from(list);
@@ -27,18 +27,6 @@ const SUB_TYPES = {
   ],
   'Grease Trap Service': ['Grease Trap Cleaning', 'Line Jetting'],
 };
-
-/** Maps a ticket description to the correct ServiceType + ServiceSubType */
-function resolveServiceType(ticketDesc, isRotisserie) {
-  if (!ticketDesc) return { ServiceType__c: isRotisserie ? 'Rotisserie Water' : 'UCO Collection', ServiceSubType__c: '' };
-  if (SUB_TYPES['Container Service'].includes(ticketDesc)) return { ServiceType__c: 'Container Service', ServiceSubType__c: ticketDesc };
-  if (SUB_TYPES['Grease Trap Service'].includes(ticketDesc)) return { ServiceType__c: 'Grease Trap Service', ServiceSubType__c: ticketDesc };
-  if (ticketDesc === 'Rotisserie Water') return { ServiceType__c: 'Rotisserie Water', ServiceSubType__c: '' };
-  if (SERVICE_TYPES.includes(ticketDesc)) return { ServiceType__c: ticketDesc, ServiceSubType__c: '' };
-  return { ServiceType__c: isRotisserie ? 'Rotisserie Water' : 'UCO Collection', ServiceSubType__c: '' };
-}
-
-const COLS_EDIT = ['#', 'Location', 'Address', 'Service Type', 'Last Gal.', 'Notes', 'Is Full', 'Status', ''];
 
 /** Build a Route__c-compatible payload for a single waypoint */
 function buildRoutePoint(w, index, route, routeName, serviceDate) {
@@ -73,6 +61,9 @@ export default function RouteEditor() {
   const drivers = useStore((st) => st.drivers);
   const serviceLocations = useStore((st) => st.serviceLocations);
   const refreshRoutes = useStore((st) => st.refreshRoutes);
+  const applyServerPatch = useStore((st) => st.applyServerPatch);
+  const invalidateRoutePolyline = useStore((st) => st.invalidateRoutePolyline);
+  const applyRouteStopOrder = useStore((st) => st.applyRouteStopOrder);
   const sfInstanceUrl = useStore((st) => st.sfInstanceUrl);
 
   const [name, setName] = useState('');
@@ -83,8 +74,22 @@ export default function RouteEditor() {
   const [waypoints, setWaypoints] = useState([]);
   const [expandedIdx, setExpandedIdx] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [removeTarget, setRemoveTarget] = useState(null);
 
+  // Latest waypoints for async callbacks so in-progress row edits survive an add.
+  const waypointsRef = useRef(waypoints);
+  useEffect(() => { waypointsRef.current = waypoints; }, [waypoints]);
+
+  // Start/end service-location coordinates used as depots for client optimization.
+  const depotCoords = useMemo(() => {
+    const toPt = (id) => {
+      const loc = serviceLocations.find((l) => l.Id === id);
+      return loc ? { lat: Number(loc.Latitude__c), lng: Number(loc.Longitude__c) } : null;
+    };
+    return { start: toPt(startLoc), end: toPt(endLoc) };
+  }, [serviceLocations, startLoc, endLoc]);
+
+  // Keyed on route.Id so store patches (e.g. an instant stop delete or an SSE
+  // update to the same route) don't re-initialize local edits mid-session.
   useEffect(() => {
     if (!route) return;
     const stops = route.Routes__r?.records ?? route.Routes__r ?? [];
@@ -96,27 +101,59 @@ export default function RouteEditor() {
     const sorted = [...stops].sort((a, b) => (a.Priority__c ?? 9999) - (b.Priority__c ?? 9999));
     setWaypoints(sorted.map((p) => ({ ...p })));
     setExpandedIdx(null);
-  }, [route]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route?.Id]);
 
-  const addAccount = useCallback((item) => {
-    const street = item.ShippingStreet || '';
-    const city = item.ShippingCity || '';
-    const state = item.ShippingState || '';
-    const addr = street + (city ? ' ' + city : '') + (state ? ',' + state : '');
+  /**
+   * Client-side optimizes `stops`, renumbers Priority__c, updates the list and
+   * map in place, and persists the new order WITHOUT a server Google callout
+   * (the authoritative optimization runs on "Save & Optimize"). Keeps list and
+   * map consistent because both sort stops by Priority__c.
+   */
+  const resequence = useCallback(async (routeId, stops) => {
+    const ordered = await optimizeStopOrder(stops, depotCoords);
+    const renumbered = ordered.map((s, i) => ({ ...s, Priority__c: i + 1 }));
+    setWaypoints(renumbered);
+    setExpandedIdx(null);
+    applyRouteStopOrder(routeId, renumbered);
+    const googleRoute = {
+      Id: routeId, Name: name, Driver__c: driverId || null,
+      Service_Date__c: serviceDate,
+      Service_Location_Start__c: startLoc || null,
+      Service_Location_End__c: endLoc || null,
+    };
+    const routePoints = renumbered.map((w, i) => buildRoutePoint(w, i, { Id: routeId }, name, serviceDate));
+    routingApi.updateRoute({ googleRoute, routePoints })
+      .catch((err) => toast.error(getErrorMessage(err)));
+  }, [depotCoords, name, driverId, serviceDate, startLoc, endLoc, applyRouteStopOrder]);
+
+  /**
+   * Adds a stop immediately: persists a Route__c via add-point, refreshes to get
+   * the created stop, then client-optimizes the full stop set so the list and
+   * map show the new, ordered path in real time. In-progress row edits survive.
+   */
+  const addAccount = useCallback(async (item) => {
+    const routeId = route?.Id;
+    if (!routeId) return;
     const ticketDesc = item._source === 'ticket' ? (item.Description || '') : '';
-    const { ServiceType__c, ServiceSubType__c } = resolveServiceType(ticketDesc, item.Rotisserie_Collection__c);
-    setWaypoints((prev) => [...prev, {
-      AccountId__c: item.Id,
-      Account__c: item.Id,
-      Account_Name__c: item.Name,
-      Container_Address__c: addr.trim() || '',
-      Latitude__c: item.MALatitude__c || null,
-      Longitude__c: item.MALongitude__c || null,
-      ServiceType__c,
-      ServiceSubType__c,
-    }]);
-  }, []);
+    try {
+      await routingApi.addPoint({ accountId: item.Id, routeId, ticketType: ticketDesc });
+      await refreshRoutes();
+      const refreshed = useStore.getState().route;
+      const stops = refreshed?.Routes__r?.records ?? refreshed?.Routes__r ?? [];
+      const prev = waypointsRef.current;
+      const existingIds = new Set(prev.map((w) => w.Id).filter(Boolean));
+      const added = stops.filter(
+        (s) => !existingIds.has(s.Id) && (s.AccountId__c === item.Id || s.Account__c === item.Id),
+      );
+      const combined = added.length ? [...prev, ...added.map((s) => ({ ...s }))] : prev;
+      await resequence(routeId, combined);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  }, [route?.Id, refreshRoutes, resequence]);
 
+  /** Removes a stop instantly (no confirmation) and refreshes the map in place. */
   const removeWaypoint = async (idx) => {
     const wp = waypoints[idx];
     if (wp?.Id) {
@@ -124,14 +161,17 @@ export default function RouteEditor() {
         await routingApi.deletePoint(wp.Id);
       } catch (err) {
         toast.error(getErrorMessage(err));
-        setRemoveTarget(null);
         return;
       }
+      // Patch the store so the map drops the marker immediately — a pure state
+      // update (no re-fetch) that keeps the list mounted and scroll preserved.
+      applyServerPatch({ object: 'route', event: 'deleted', record: { id: wp.Id, googleRouteId: route.Id } });
+      // Drop the stale polyline so the map redraws the path from the remaining stops.
+      invalidateRoutePolyline(route.Id);
     }
     setWaypoints((prev) => prev.filter((_, i) => i !== idx));
     if (expandedIdx === idx) setExpandedIdx(null);
     else if (expandedIdx > idx) setExpandedIdx(expandedIdx - 1);
-    setRemoveTarget(null);
   };
 
   const updateWaypoint = (idx, field, value) =>
@@ -205,7 +245,6 @@ export default function RouteEditor() {
             <span className="text-xs text-txt-secondary bg-bg px-2 py-0.5 rounded tabular-nums">{waypoints.length} stops</span>
           </div>
           <div className="flex gap-1.5 shrink-0">
-            <button className="h-7 px-3 rounded-lg border border-border text-txt text-[11px] font-medium hover:bg-bg transition" onClick={() => closeModal('isEdit')}>Cancel</button>
             <button className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-hover transition disabled:opacity-50" onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : 'Save & Optimize'}
             </button>
@@ -314,7 +353,7 @@ export default function RouteEditor() {
                           <button
                             className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-error-bg text-txt-secondary hover:text-error transition shrink-0"
                             title="Remove"
-                            onClick={(e) => { e.stopPropagation(); setRemoveTarget(idx); }}
+                            onClick={(e) => { e.stopPropagation(); removeWaypoint(idx); }}
                           >
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -338,16 +377,6 @@ export default function RouteEditor() {
           </Droppable>
         </DragDropContext>
       </div>
-
-      <ConfirmModal
-        open={removeTarget !== null}
-        title="Remove Stop"
-        message={removeTarget !== null ? `Remove "${waypoints[removeTarget]?.Account_Name__c || 'Stop'}" from the route?` : ''}
-        confirmLabel="Remove"
-        variant="danger"
-        onConfirm={() => removeWaypoint(removeTarget)}
-        onCancel={() => setRemoveTarget(null)}
-      />
     </div>
   );
 }
@@ -437,7 +466,7 @@ function ExpandedRow({ wp, idx, updateWaypoint }) {
                 <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Code</th>
                 <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Date</th>
                 <th className="text-right px-2 py-1 font-semibold text-txt-secondary">Gal.</th>
-                <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Notes</th>
+                <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Driver Notes</th>
                 <th className="text-left px-2 py-1 font-semibold text-txt-secondary">By</th>
               </tr>
             </thead>
@@ -450,7 +479,7 @@ function ExpandedRow({ wp, idx, updateWaypoint }) {
                   </td>
                   <td className="px-2 py-1 text-txt tabular-nums">{s.Service_Date__c ?? '—'}</td>
                   <td className="px-2 py-1 text-txt tabular-nums text-right font-medium">{s.Qty_Gallons__c ?? '—'}</td>
-                  <td className="px-2 py-1 text-txt-secondary max-w-[100px] truncate" title={s.Notes__c}>{s.Notes__c ?? '—'}</td>
+                  <td className="px-2 py-1 text-txt-secondary max-w-[100px] truncate" title={s.DriverNotes__c}>{s.DriverNotes__c ?? '—'}</td>
                   <td className="px-2 py-1 text-txt">{s.ServicedBy__c ?? '—'}</td>
                 </tr>
               ))}

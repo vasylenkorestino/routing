@@ -2,6 +2,7 @@ const router = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../config/anthropic');
 const { getConnection } = require('../services/salesforce');
+const { optimizeGoogleRoute } = require('../services/sfRoutingApi');
 const { logErrorToSalesforce } = require('../services/errorLogger');
 const { logAction } = require('../services/actionLogger');
 const { createRecorder } = require('../services/stepRecorder');
@@ -428,10 +429,52 @@ router.post('/approve', async (req, res, next) => {
     }
 
     const added = items.filter((i) => i.outcome === 'add').map((i) => i.logId);
+
+    // When the route membership changed (a stop was added or removed), re-optimize
+    // the affected route(s) synchronously so the client refresh shows the correct
+    // stop order. Best-effort: routes without start/end Service Locations can't be
+    // optimized (the optimizer throws) — skip those without failing the approve.
+    if (added.length || removed.length) {
+      const changedLogIds = [...new Set([...added, ...removed])];
+      const idList = changedLogIds.map((id) => `'${id}'`).join(',');
+      const changed = await conn.query(`SELECT Id, Google_Route__c FROM RouteLog__c WHERE Id IN (${idList})`);
+      const routeIds = [...new Set((changed.records || []).map((r) => r.Google_Route__c).filter(Boolean))];
+      for (const routeId of routeIds) {
+        try {
+          await reoptimizeRoute(conn, routeId);
+        } catch (err) {
+          logger.warn('[enhance/approve] re-optimize skipped', { routeId, error: err.message });
+        }
+      }
+    }
+
     res.json({ success: true, updated: items.length, added, removed });
   } catch (err) {
     next(err);
   }
 });
+
+/**
+ * Re-optimizes a route in place via the Apex optimize-route endpoint (the same
+ * optimizer used elsewhere in the app). Throws if the route has no start/end
+ * Service Location, which callers handle as a best-effort skip.
+ */
+async function reoptimizeRoute(conn, routeId) {
+  const header = await conn.query(
+    `SELECT Id, Driver__c, Service_Location_Start__c, Service_Location_End__c
+     FROM Google_Route__c WHERE Id = '${routeId}'`
+  );
+  const googleRoute = header.records?.[0];
+  if (!googleRoute) return;
+
+  const stops = await conn.query(
+    `SELECT Id, AccountId__c, Fixed_point__c FROM Route__c
+     WHERE Google_Route_Id__c = '${routeId}' AND AccountId__c != null`
+  );
+  const routePoints = stops.records || [];
+  if (!routePoints.length) return;
+
+  await optimizeGoogleRoute(googleRoute, routePoints);
+}
 
 module.exports = router;
