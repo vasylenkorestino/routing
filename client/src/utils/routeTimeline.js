@@ -105,9 +105,16 @@ export function formatOffset(sec) {
   return m === 0 ? `+${h}h` : `+${h}h ${m}m`;
 }
 
-/** "10:45 AM" for an epoch-ms timestamp. */
+/** Timezone the routes operate in — DB timestamps are GMT, display is local Atlanta time. */
+export const ROUTE_TIME_ZONE = 'America/New_York';
+
+/** "10:45 AM" (in ROUTE_TIME_ZONE) for an epoch-ms timestamp. */
 export function formatClock(ms) {
-  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return new Date(ms).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: ROUTE_TIME_ZONE,
+  });
 }
 
 /** "12 min" / "1h 5m" for a leg duration in seconds. */

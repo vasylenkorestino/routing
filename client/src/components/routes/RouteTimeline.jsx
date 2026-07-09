@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import useStore from '../../store';
 import useRouteTimeline from '../../hooks/useRouteTimeline';
 import { formatOffset } from '../../utils/routeTimeline';
+import { isCompletedStatus } from '../../utils/stopStatus';
 
 /** Depot colors matching the map's S / E markers. */
 const DEPOT_COLORS = { start: '#10b981', end: '#ef4444' };
@@ -54,6 +55,18 @@ export default function RouteTimeline({ route }) {
 
   const { nodes, mode, isEstimate, totalSec, progressIndex } = useRouteTimeline(route);
 
+  // First stop not yet completed — the timeline auto-centers on it when opened.
+  const firstPendingKey = useMemo(
+    () => nodes.find((n) => n.kind === 'stop' && !isCompletedStatus(n.stop?.Status__c))?.key ?? null,
+    [nodes],
+  );
+  const pendingNodeRef = useRef(null);
+
+  useEffect(() => {
+    if (!open || !pendingNodeRef.current) return;
+    pendingNodeRef.current.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }, [open, firstPendingKey]);
+
   if (nodes.length === 0) return null;
 
   return (
@@ -86,7 +99,11 @@ export default function RouteTimeline({ route }) {
               const isStop = node.kind === 'stop';
               const highlighted = isStop && (hoveredStopId === node.stop?.Id || selectedStopId === node.stop?.Id);
               return (
-                <div key={node.key} className="flex items-start">
+                <div
+                  key={node.key}
+                  ref={node.key === firstPendingKey ? pendingNodeRef : undefined}
+                  className="flex items-start"
+                >
                   {i > 0 && <Connector label={node.legFromPrevLabel} reached={i <= progressIndex} />}
                   <div
                     className={`flex flex-col items-center gap-0.5 w-[74px] ${isStop ? 'cursor-pointer' : ''}`}
