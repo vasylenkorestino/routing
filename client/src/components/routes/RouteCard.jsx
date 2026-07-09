@@ -5,6 +5,7 @@ import AccountTicketSearch from '../shared/AccountTicketSearch';
 import { OverlaySpinner } from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import { isRouteCompleted } from '../../utils/route';
 
 /** Route header card — shows key metrics and action buttons for the selected route */
 export default function RouteCard({ route }) {
@@ -66,7 +67,7 @@ export default function RouteCard({ route }) {
   if (!route) return null;
 
   const color = route._color ?? '#2563eb';
-  const routeCompleted = !!route.Driver_Completed__c;
+  const routeCompleted = isRouteCompleted(route);
   const completionInProgress = route.CompletionStatus__c === 'In Progress';
 
   return (

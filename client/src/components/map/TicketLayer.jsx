@@ -9,6 +9,7 @@ import { ticketHasCoords, ticketLat, ticketLng, ticketNotes } from '../../utils/
 import { formatMiles } from '../../utils/routeDistance';
 import { ticketMarkerIcon } from '../../utils/ticketMarker';
 import useOffRouteDistances, { ticketKey } from '../../hooks/useOffRouteDistances';
+import { isRouteCompleted } from '../../utils/route';
 
 const EMPTY_CANDIDATES = {};
 
@@ -41,6 +42,10 @@ export default function TicketLayer({ tickets = [] }) {
 
   const handleAdd = useCallback(async (ticket) => {
     if (!routeId) return;
+    if (isRouteCompleted(route)) {
+      toast.info('Route is completed — stops cannot be added');
+      return;
+    }
     setAdding(true);
     try {
       await routingApi.addPoint({
@@ -55,7 +60,7 @@ export default function TicketLayer({ tickets = [] }) {
     } finally {
       setAdding(false);
     }
-  }, [routeId, refreshRoutes]);
+  }, [routeId, route, refreshRoutes]);
 
   const handleShowOnMap = useCallback((ticket) => {
     if (!ticketHasCoords(ticket)) {

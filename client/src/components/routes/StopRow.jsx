@@ -24,8 +24,9 @@ const EDIT_FIELDS = ['ServiceType__c', 'ServiceSubType__c', 'Notes__c', 'isFull_
  * service/gallons/status badges, edit + remove actions. Editing expands an inline
  * panel below the row (service type, notes, Is Full / Fixed, last services) rather
  * than opening a modal. Syncs hover with the map marker via hoveredStopId.
+ * `readOnly` hides the edit/remove actions (e.g. when the route is completed).
  */
-export default function StopRow({ stop, index, color, onRemove }) {
+export default function StopRow({ stop, index, color, onRemove, readOnly = false }) {
   const sfInstanceUrl = useStore((st) => st.sfInstanceUrl);
   const hovered = useStore((st) => st.hoveredStopId === stop.Id);
   const hoveredFromMap = useStore((st) => st.hoveredStopId === stop.Id && st.hoveredStopSource === 'map');
@@ -120,28 +121,32 @@ export default function StopRow({ stop, index, color, onRemove }) {
         )}
         <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded shrink-0 ${status.cls}`}>{status.label}</span>
 
-        <button
-          type="button"
-          title={editing ? 'Close editor' : 'Edit stop'}
-          className={`w-6 h-6 flex items-center justify-center rounded-md transition shrink-0 ${
-            editing ? 'text-primary bg-primary/10' : 'text-txt-secondary hover:text-primary hover:bg-primary/10'
-          }`}
-          onClick={(e) => { e.stopPropagation(); editing ? setEditing(false) : openEditor(); }}
-        >
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          title="Remove stop"
-          className="w-6 h-6 flex items-center justify-center rounded-md text-txt-secondary hover:text-error hover:bg-error-bg transition shrink-0"
-          onClick={(e) => { e.stopPropagation(); onRemove?.(stop); }}
-        >
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        {!readOnly && (
+          <>
+            <button
+              type="button"
+              title={editing ? 'Close editor' : 'Edit stop'}
+              className={`w-6 h-6 flex items-center justify-center rounded-md transition shrink-0 ${
+                editing ? 'text-primary bg-primary/10' : 'text-txt-secondary hover:text-primary hover:bg-primary/10'
+              }`}
+              onClick={(e) => { e.stopPropagation(); editing ? setEditing(false) : openEditor(); }}
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              title="Remove stop"
+              className="w-6 h-6 flex items-center justify-center rounded-md text-txt-secondary hover:text-error hover:bg-error-bg transition shrink-0"
+              onClick={(e) => { e.stopPropagation(); onRemove?.(stop); }}
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Inline editor — mirrors the route editor's expandable panel */}

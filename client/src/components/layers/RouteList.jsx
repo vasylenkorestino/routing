@@ -5,6 +5,7 @@ import StopRow from '../routes/StopRow';
 import AccountTicketSearch from '../shared/AccountTicketSearch';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import { isRouteCompleted } from '../../utils/route';
 
 /** Reads child stops (sorted by Priority__c so numbering matches map markers). */
 function getStops(route) {
@@ -90,6 +91,7 @@ export default function RouteList({ routes = [] }) {
           const visible = !hiddenRouteIds[id];
           const aiSelected = !!aiSelectedRouteIds[id];
           const visibleStops = q ? stops.filter(matchesQuery) : stops;
+          const completed = isRouteCompleted(route);
 
           return (
             <div key={id ?? idx} className="py-1.5">
@@ -142,7 +144,8 @@ export default function RouteList({ routes = [] }) {
                 </button>
               </div>
 
-              {open && (
+              {/* Completed routes are read-only — no adding, editing or removing stops */}
+              {open && !completed && (
                 <div className="mt-1.5 ml-7 mb-1.5">
                   {/* Search accounts & tickets to add directly to this route */}
                   <AccountTicketSearch />
@@ -157,6 +160,7 @@ export default function RouteList({ routes = [] }) {
                       stop={pt}
                       index={stops.indexOf(pt)}
                       color={color}
+                      readOnly={completed}
                       onRemove={(stop) => removeStop(route, stop)}
                     />
                   ))}

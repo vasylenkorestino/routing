@@ -9,6 +9,7 @@ import { formatMiles } from '../../utils/routeDistance';
 import { TICKET_COLORS } from '../../utils/ticketMarker';
 import EyeIcon from '../ui/EyeIcon';
 import useOffRouteDistances, { ticketKey } from '../../hooks/useOffRouteDistances';
+import { isRouteCompleted } from '../../utils/route';
 
 const EMPTY_CANDIDATES = {};
 
@@ -81,6 +82,10 @@ export default function TicketList({ tickets = [], onToggleType, loadingType = n
       toast.info('Please select a route first');
       return;
     }
+    if (isRouteCompleted(routes.find((r) => r.Id === routeId))) {
+      toast.info('Route is completed — stops cannot be added');
+      return;
+    }
     const id = ticket.Id;
     setAdding(id);
     try {
@@ -101,6 +106,10 @@ export default function TicketList({ tickets = [], onToggleType, loadingType = n
   /** Adds every AI-suggested ticket sequentially, then refreshes once. */
   const handleAddAllSuggested = async () => {
     if (!routeId || bulkAdding) return;
+    if (isRouteCompleted(routes.find((r) => r.Id === routeId))) {
+      toast.info('Route is completed — stops cannot be added');
+      return;
+    }
     const seen = new Set();
     const toAdd = tickets.filter((t) => {
       if (!candidates[t.Id] || seen.has(t.Id)) return false;
@@ -144,7 +153,7 @@ export default function TicketList({ tickets = [], onToggleType, loadingType = n
             onChange={(e) => setSelectedRouteId(e.target.value)}
           >
             <option value="">Select route to add to…</option>
-            {routes.map((r) => <option key={r.Id} value={r.Id}>{r.Name}</option>)}
+            {routes.filter((r) => !isRouteCompleted(r)).map((r) => <option key={r.Id} value={r.Id}>{r.Name}</option>)}
           </select>
         </div>
       )}

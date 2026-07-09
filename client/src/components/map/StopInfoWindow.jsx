@@ -5,6 +5,7 @@ import * as routingApi from '../../api/routing';
 import ConfirmModal from '../ui/ConfirmModal';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import { isRouteCompleted } from '../../utils/route';
 
 /** InfoWindow for route stops — shows account info, Remove + Last Services buttons */
 export default function StopInfoWindow({ stop, onClose }) {
@@ -12,6 +13,7 @@ export default function StopInfoWindow({ stop, onClose }) {
   const refreshRoutes = useStore((s) => s.refreshRoutes);
   const currentRouteId = useStore((s) => s.routeId);
   const currentRouteName = useStore((s) => s.route?.Name);
+  const currentRouteCompleted = useStore((s) => isRouteCompleted(s.route));
   const [removing, setRemoving] = useState(false);
   const [adding, setAdding] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -130,7 +132,8 @@ export default function StopInfoWindow({ stop, onClose }) {
 
         {/* Action buttons */}
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-          {belongsToCurrent ? (
+          {/* Completed routes are read-only — no removing/adding stops */}
+          {currentRouteCompleted ? null : belongsToCurrent ? (
             <button
               onClick={() => setConfirmOpen(true)}
               disabled={removing}

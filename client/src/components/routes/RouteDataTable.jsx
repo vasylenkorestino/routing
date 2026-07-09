@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import useStore from '../../store';
+import { isRouteCompleted } from '../../utils/route';
 
 /** Route stops — table when wide, cards when narrow */
 export default function RouteDataTable({ points: rawPoints = [], onSelectPoint }) {
@@ -90,6 +91,8 @@ function statusBadge(raw) {
 function TableView({ points, onSelectPoint }) {
   const sfInstanceUrl = useStore((s) => s.sfInstanceUrl);
   const openPointEditor = useStore((s) => s.openPointEditor);
+  // Completed routes are read-only — stop editing is disabled.
+  const readOnly = useStore((s) => isRouteCompleted(s.route));
 
   return (
     <div className="bg-surface rounded-lg border border-border overflow-auto">
@@ -167,6 +170,7 @@ function TableView({ points, onSelectPoint }) {
                   </span>
                 </td>
                 <td className="px-2.5 py-2 text-center">
+                  {!readOnly && (
                   <button
                     type="button"
                     title="Edit stop"
@@ -181,6 +185,7 @@ function TableView({ points, onSelectPoint }) {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v4.875a2.625 2.625 0 01-2.625 2.625H5.625A2.625 2.625 0 013 19.125V8.625A2.625 2.625 0 015.625 6H10.5" />
                     </svg>
                   </button>
+                  )}
                 </td>
               </tr>
             );

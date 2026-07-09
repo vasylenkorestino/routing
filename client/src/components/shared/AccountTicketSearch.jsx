@@ -3,6 +3,7 @@ import * as routingApi from '../../api/routing';
 import useStore from '../../store';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import { isRouteCompleted } from '../../utils/route';
 
 /**
  * Unified search — shows accounts with expandable ticket sections.
@@ -85,6 +86,10 @@ export default function AccountTicketSearch({ mode = 'add', onAdd }) {
       return;
     }
     if (!routeId) { toast.info('Please select a route first'); return; }
+    if (isRouteCompleted(routes.find((r) => r.Id === routeId))) {
+      toast.info('Route is completed — stops cannot be added');
+      return;
+    }
     setAdding(key);
     try {
       await routingApi.addPoint({ accountId: account.Id, routeId, ticketType });
@@ -135,7 +140,7 @@ export default function AccountTicketSearch({ mode = 'add', onAdd }) {
           onChange={(e) => setSelectedRouteId(e.target.value)}
         >
           <option value="">Select route to add to…</option>
-          {routes.map((r) => <option key={r.Id} value={r.Id}>{r.Name}</option>)}
+          {routes.filter((r) => !isRouteCompleted(r)).map((r) => <option key={r.Id} value={r.Id}>{r.Name}</option>)}
         </select>
       )}
       <div className="relative">
