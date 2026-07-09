@@ -8,6 +8,7 @@ import RouteCard from '../components/routes/RouteCard';
 import RouteDataTable from '../components/routes/RouteDataTable';
 import RouteEditor from '../components/routes/RouteEditor';
 import RouteLogsPanel from '../components/routes/RouteLogsPanel';
+import RouteTimeline from '../components/routes/RouteTimeline';
 import RouteCreator from '../components/routes/RouteCreator';
 import RouteSplitter from '../components/routes/RouteSplitter';
 import RouteCombiner from '../components/routes/RouteCombiner';
@@ -42,6 +43,12 @@ function RightPanel() {
       {route && !isEdit && (
         <div className="shrink-0 p-3 pb-0">
           <RouteCard route={route} />
+        </div>
+      )}
+
+      {route && !isEdit && (
+        <div className="shrink-0 px-3 pt-2">
+          <RouteTimeline route={route} />
         </div>
       )}
 

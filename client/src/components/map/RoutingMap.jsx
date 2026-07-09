@@ -3,9 +3,11 @@ import { GoogleMap, useLoadScript, Marker, InfoWindow } from '@react-google-maps
 import useStore from '../../store';
 import { decodeRoutePolyline, isValidCoord } from '../../utils/routePolyline';
 import RouteLayer, { CompareRouteLayer } from './RouteLayer';
+import RouteTimelineMapLayer from './RouteTimelineMapLayer';
 import TicketLayer from './TicketLayer';
 import ShapeLayer from './ShapeLayer';
 import MapOverlayPanel from './MapOverlayPanel';
+import MapLegend from './MapLegend';
 
 const LIBRARIES = ['geometry'];
 
@@ -21,6 +23,7 @@ export default function RoutingMap() {
   const mapZoom = useStore((s) => s.mapZoom);
   const route = useStore((s) => s.route);
   const compareRoutes = useStore((s) => s.compareRoutes);
+  const compareMode = useStore((s) => s.compareMode);
   const serviceLocations = useStore((s) => s.serviceLocations);
   const setMapBounds = useStore((s) => s.setMapBounds);
   const mapRef = useRef(null);
@@ -116,6 +119,7 @@ export default function RoutingMap() {
       }}
     >
       {layers.routes.visible && <RouteLayer />}
+      {layers.routes.visible && !compareMode && <RouteTimelineMapLayer />}
       <CompareRouteLayer />
       {layers.tickets.visible && <TicketLayer tickets={layers.tickets.data} />}
       {layers.shapes.visible && <ShapeLayer shapes={layers.shapes.data} />}
@@ -163,6 +167,9 @@ export default function RoutingMap() {
         </InfoWindow>
       )}
     </GoogleMap>
+
+    {/* Stop status legend — hidden in compare mode where markers use route colors */}
+    {layers.routes.visible && !compareMode && <MapLegend />}
     </div>
     <MapOverlayPanel />
     </div>

@@ -1,0 +1,114 @@
+import { useState } from 'react';
+import useStore from '../../store';
+import useRouteTimeline from '../../hooks/useRouteTimeline';
+import { formatOffset } from '../../utils/routeTimeline';
+
+/** Depot colors matching the map's S / E markers. */
+const DEPOT_COLORS = { start: '#10b981', end: '#ef4444' };
+
+/** Circle node — stop number colored by status, or S / E for depots. */
+function NodeCircle({ node, highlighted }) {
+  const color = node.kind === 'stop' ? (node.status?.color ?? '#2563eb') : DEPOT_COLORS[node.kind];
+  const text = node.kind === 'stop' ? String(node.index + 1) : node.kind === 'start' ? 'S' : 'E';
+  return (
+    <span
+      className="flex items-center justify-center rounded-full text-white font-bold shrink-0 transition"
+      style={{
+        width: 24,
+        height: 24,
+        fontSize: 11,
+        backgroundColor: color,
+        boxShadow: highlighted ? '0 0 0 3px #facc15' : '0 0 0 2px #fff',
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
+/** Track segment between two nodes with the leg drive time on it. */
+function Connector({ label, reached }) {
+  return (
+    <div className="flex flex-col items-center justify-center min-w-[44px] flex-1 px-1 pt-[5px] self-start">
+      <span className="text-[9px] leading-3 text-txt-secondary whitespace-nowrap tabular-nums h-3">
+        {label ?? ''}
+      </span>
+      <div className={`h-0.5 w-full rounded-full ${reached ? 'bg-success' : 'bg-border'}`} />
+    </div>
+  );
+}
+
+/**
+ * Horizontal route timeline: start depot → stops (by Priority__c) → end depot,
+ * with per-stop times (clock times when anchored to a completed stop,
+ * relative offsets otherwise), leg drive times on the connectors, and a
+ * progress fill up to the last completed stop. Hover/click syncs with the
+ * map markers via hoveredStopId / selectedStopId. Collapsible.
+ */
+export default function RouteTimeline({ route }) {
+  const [open, setOpen] = useState(true);
+  const hoveredStopId = useStore((s) => s.hoveredStopId);
+  const selectedStopId = useStore((s) => s.selectedStopId);
+  const setHoveredStopId = useStore((s) => s.setHoveredStopId);
+  const setSelectedStopId = useStore((s) => s.setSelectedStopId);
+
+  const { nodes, mode, isEstimate, totalSec, progressIndex } = useRouteTimeline(route);
+
+  if (nodes.length === 0) return null;
+
+  return (
+    <div className="bg-surface border border-border rounded-xl">
+      <button
+        className="flex items-center gap-2 w-full px-3 py-2 text-xs font-semibold text-txt hover:bg-bg transition rounded-xl"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span>{open ? '▾' : '▸'}</span>
+        Route Timeline
+        <span className="font-normal text-txt-secondary tabular-nums">
+          {formatOffset(totalSec).replace('+', '')} total
+        </span>
+        {isEstimate && (
+          <span className="text-[9px] font-medium text-txt-secondary border border-border rounded-full px-1.5 py-px">
+            estimating…
+          </span>
+        )}
+        {mode === 'clock' && (
+          <span className="text-[9px] font-medium text-success bg-success-bg border border-success/20 rounded-full px-1.5 py-px">
+            live times
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="overflow-x-auto px-3 pb-2">
+          <div className="flex items-start min-w-max py-1">
+            {nodes.map((node, i) => {
+              const isStop = node.kind === 'stop';
+              const highlighted = isStop && (hoveredStopId === node.stop?.Id || selectedStopId === node.stop?.Id);
+              return (
+                <div key={node.key} className="flex items-start">
+                  {i > 0 && <Connector label={node.legFromPrevLabel} reached={i <= progressIndex} />}
+                  <div
+                    className={`flex flex-col items-center gap-0.5 w-[74px] ${isStop ? 'cursor-pointer' : ''}`}
+                    onMouseEnter={isStop ? () => node.stop?.Id && setHoveredStopId(node.stop.Id, 'list') : undefined}
+                    onMouseLeave={isStop ? () => setHoveredStopId(null) : undefined}
+                    onClick={isStop ? () => node.stop?.Id && setSelectedStopId(node.stop.Id) : undefined}
+                    title={node.name}
+                  >
+                    <NodeCircle node={node} highlighted={highlighted} />
+                    <span className="text-[10px] leading-tight text-txt text-center w-full truncate">
+                      {node.name}
+                    </span>
+                    <span className="text-[10px] font-semibold text-txt-secondary tabular-nums">
+                      {node.timeLabel}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

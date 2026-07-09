@@ -3,42 +3,9 @@ import { Marker } from '@react-google-maps/api';
 import { useGoogleMap } from '@react-google-maps/api';
 import useStore from '../../store';
 import StopInfoWindow from './StopInfoWindow';
-import { decodeRoutePolyline, isValidCoord } from '../../utils/routePolyline';
-
-function hasValidCoords(s) {
-  return isValidCoord(Number(s.Latitude__c), Number(s.Longitude__c));
-}
-
-function slCoord(sl) {
-  if (!sl) return null;
-  const lat = Number(sl.Latitude__c);
-  const lng = Number(sl.Longitude__c);
-  if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
-  return { lat, lng };
-}
-
-function getStopsAndPolyline(route, startPt, endPt) {
-  const allStops = route.Routes__r?.records ?? route.Routes__r ?? [];
-  const stops = allStops
-    .filter(hasValidCoords)
-    .sort((a, b) => (a.Priority__c ?? 0) - (b.Priority__c ?? 0));
-
-  const anchors = [
-    ...stops.map((s) => ({ lat: Number(s.Latitude__c), lng: Number(s.Longitude__c) })),
-    ...(startPt ? [startPt] : []),
-    ...(endPt ? [endPt] : []),
-  ];
-
-  const polyPath = route.Polyline__c
-    ? decodeRoutePolyline(route.Polyline__c, { anchors })
-    : [];
-
-  if (route.Polyline__c && polyPath.length < 2) {
-    console.warn(`[RouteLayer] polyline unusable for ${route.Name}; using driving directions`);
-  }
-
-  return { stops, polyPath };
-}
+import StopTooltip from './StopTooltip';
+import { getStopStatus } from '../../utils/stopStatus';
+import { hasValidCoords, slCoord, getStopsAndPolyline } from '../../utils/routeGeometry';
 
 /** Request driving directions for a single chunk (max 25 total = origin + 23 waypoints + destination) */
 function requestDrivingChunk(origin, destination, waypoints = []) {
@@ -180,39 +147,44 @@ function NativePolyline({ path, color, visible }) {
  * Numbered stop marker with hover-sync: highlights (bigger, ringed, on top)
  * when its list row is hovered/selected, and reports map hover back to the
  * list via hoveredStopId. Never pans or zooms the map.
+ * `status` (from getStopStatus) colors the marker; hovering on the map shows
+ * a compact StopTooltip with the key details.
  */
-function StopMarker({ pt, index, color, onClick }) {
+function StopMarker({ pt, index, color, status, onClick }) {
   const highlighted = useStore((s) => s.hoveredStopId === pt.Id || s.selectedStopId === pt.Id);
+  const hoveredFromMap = useStore((s) => s.hoveredStopId === pt.Id && s.hoveredStopSource === 'map');
   const setHoveredStopId = useStore((s) => s.setHoveredStopId);
 
   return (
-    <Marker
-      position={{ lat: Number(pt.Latitude__c), lng: Number(pt.Longitude__c) }}
-      label={{
-        text: String(index + 1),
-        color: '#fff',
-        fontSize: highlighted ? '13px' : '11px',
-        fontWeight: '700',
-      }}
-      icon={{
-        path: window.google?.maps?.SymbolPath?.CIRCLE ?? 0,
-        scale: highlighted ? 20 : 16,
-        fillColor: color,
-        fillOpacity: 1,
-        strokeColor: highlighted ? '#facc15' : '#fff',
-        strokeWeight: highlighted ? 4 : 2.5,
-      }}
-      zIndex={highlighted ? 10000 : undefined}
-      title={`${index + 1}. ${pt.Account_Name__c || pt.Name || ''}`}
-      onClick={onClick}
-      onMouseOver={() => pt.Id && setHoveredStopId(pt.Id, 'map')}
-      onMouseOut={() => setHoveredStopId(null)}
-    />
+    <>
+      <Marker
+        position={{ lat: Number(pt.Latitude__c), lng: Number(pt.Longitude__c) }}
+        label={{
+          text: String(index + 1),
+          color: '#fff',
+          fontSize: highlighted ? '13px' : '11px',
+          fontWeight: '700',
+        }}
+        icon={{
+          path: window.google?.maps?.SymbolPath?.CIRCLE ?? 0,
+          scale: highlighted ? 20 : 16,
+          fillColor: status?.color ?? color,
+          fillOpacity: 1,
+          strokeColor: highlighted ? '#facc15' : '#fff',
+          strokeWeight: highlighted ? 4 : 2.5,
+        }}
+        zIndex={highlighted ? 10000 : undefined}
+        onClick={onClick}
+        onMouseOver={() => pt.Id && setHoveredStopId(pt.Id, 'map')}
+        onMouseOut={() => setHoveredStopId(null)}
+      />
+      {hoveredFromMap && <StopTooltip stop={pt} index={index} status={status} />}
+    </>
   );
 }
 
-/** Single route rendered on map */
-function SingleRoute({ route, onSelectStop, forceVisible = false }) {
+/** Single route rendered on map — `useStatusColors` fills stop markers by service status */
+function SingleRoute({ route, onSelectStop, forceVisible = false, useStatusColors = true }) {
   const hiddenRouteIds = useStore((s) => s.hiddenRouteIds);
   const serviceLocations = useStore((s) => s.serviceLocations);
 
@@ -231,6 +203,13 @@ function SingleRoute({ route, onSelectStop, forceVisible = false }) {
   const hasPolyline = polyPath.length >= 2;
 
   const { startPath, endPath, fullPath } = useDrivingPaths(id, startPt, endPt, stops, hasPolyline);
+
+  // Status per stop (Completed / Needs Attention / Overdue / Scheduled) for marker colors.
+  const stopStatuses = useMemo(
+    () => (useStatusColors ? stops.map((pt) => getStopStatus(pt, stops)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [useStatusColors, stops.map((s) => `${s.Id}:${s.Status__c}`).join('|')],
+  );
 
   return (
     <>
@@ -258,6 +237,7 @@ function SingleRoute({ route, onSelectStop, forceVisible = false }) {
           pt={pt}
           index={pIdx}
           color={color}
+          status={useStatusColors ? stopStatuses[pIdx] : null}
           onClick={() => onSelectStop({ ...pt, _routeName: route.Name, _color: color, _googleRouteId: route.Id ?? route.id })}
         />
       ))}
@@ -359,8 +339,9 @@ export function CompareRouteLayer() {
 
   return (
     <>
+      {/* Compare overlays keep their palette colors so routes stay distinguishable */}
       {compareRoutes.map((r) => (
-        <SingleRoute key={r.Id ?? r.id} route={r} onSelectStop={selectStop} forceVisible />
+        <SingleRoute key={r.Id ?? r.id} route={r} onSelectStop={selectStop} forceVisible useStatusColors={false} />
       ))}
 
       {shared.map((a) => (
@@ -398,6 +379,7 @@ export default function RouteLayer() {
           key={route.Id ?? route.id}
           route={route}
           onSelectStop={handleSelect}
+          useStatusColors={!compareMode}
         />
       ))}
 
