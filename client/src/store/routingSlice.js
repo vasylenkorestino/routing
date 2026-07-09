@@ -290,6 +290,7 @@ const routingSlice = (set, get) => ({
    */
   applyRouteStopOrder: (routeId, orderedStops) => {
     if (!routeId || !Array.isArray(orderedStops)) return;
+    get().clearTicketCandidates?.(routeId);
     const clearPoly = (r) => (r.Polyline__c ? { ...r, Polyline__c: null } : r);
     const apply = (r) =>
       getId(r) === routeId ? clearPoly(withPreparedStops(r, orderedStops)) : r;
@@ -368,6 +369,9 @@ function applyRouteStopPatch(set, get, event, record) {
   const parentIdx = current.findIndex((r) => getId(r) === parentId);
   if (parentIdx === -1) return;
 
+  // Stops changed — cached AI ticket suggestions for this route are stale.
+  get().clearTicketCandidates?.(parentId);
+
   const parent = current[parentIdx];
   const stops = getRouteStops(parent).slice();
 
@@ -421,7 +425,7 @@ function mergeGoogleRoute(existing, p) {
 /** Map webhook stop payload onto the SF-shaped Route__c kept in store. */
 function mergeRouteStop(existing, p) {
   const base = existing ? { ...existing } : { Id: p.id };
-  return {
+  const merged = {
     ...base,
     Id: p.id,
     Name: p.name ?? base.Name,
@@ -450,6 +454,7 @@ function mergeRouteStop(existing, p) {
   applyPointStatusStyle(merged);
   return merged;
 }
+
 
 function nullable(incoming, fallback) {
   return incoming === undefined ? fallback : incoming;

@@ -1,8 +1,11 @@
 import React, { useMemo } from 'react';
 import { Polygon } from '@react-google-maps/api';
+import useStore from '../../store';
 
-/** Polygon overlays for Shape__c records */
+/** Polygon overlays for Shape__c records (hidden shapes skipped via hiddenShapeIds) */
 export default function ShapeLayer({ shapes = [] }) {
+  const hiddenShapeIds = useStore((s) => s.hiddenShapeIds);
+
   const parsed = useMemo(
     () =>
       shapes.map((s) => {
@@ -22,7 +25,7 @@ export default function ShapeLayer({ shapes = [] }) {
 
   return (
     <>
-      {parsed.map((s, i) => (
+      {parsed.filter((s) => s.paths.length && !hiddenShapeIds[s.Id]).map((s, i) => (
         <Polygon
           key={s.Id ?? i}
           paths={s.paths}

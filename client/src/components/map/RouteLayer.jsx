@@ -176,6 +176,41 @@ function NativePolyline({ path, color, visible }) {
   return null;
 }
 
+/**
+ * Numbered stop marker with hover-sync: highlights (bigger, ringed, on top)
+ * when its list row is hovered/selected, and reports map hover back to the
+ * list via hoveredStopId. Never pans or zooms the map.
+ */
+function StopMarker({ pt, index, color, onClick }) {
+  const highlighted = useStore((s) => s.hoveredStopId === pt.Id || s.selectedStopId === pt.Id);
+  const setHoveredStopId = useStore((s) => s.setHoveredStopId);
+
+  return (
+    <Marker
+      position={{ lat: Number(pt.Latitude__c), lng: Number(pt.Longitude__c) }}
+      label={{
+        text: String(index + 1),
+        color: '#fff',
+        fontSize: highlighted ? '13px' : '11px',
+        fontWeight: '700',
+      }}
+      icon={{
+        path: window.google?.maps?.SymbolPath?.CIRCLE ?? 0,
+        scale: highlighted ? 20 : 16,
+        fillColor: color,
+        fillOpacity: 1,
+        strokeColor: highlighted ? '#facc15' : '#fff',
+        strokeWeight: highlighted ? 4 : 2.5,
+      }}
+      zIndex={highlighted ? 10000 : undefined}
+      title={`${index + 1}. ${pt.Account_Name__c || pt.Name || ''}`}
+      onClick={onClick}
+      onMouseOver={() => pt.Id && setHoveredStopId(pt.Id, 'map')}
+      onMouseOut={() => setHoveredStopId(null)}
+    />
+  );
+}
+
 /** Single route rendered on map */
 function SingleRoute({ route, onSelectStop, forceVisible = false }) {
   const hiddenRouteIds = useStore((s) => s.hiddenRouteIds);
@@ -218,23 +253,11 @@ function SingleRoute({ route, onSelectStop, forceVisible = false }) {
       )}
 
       {visible && stops.map((pt, pIdx) => (
-        <Marker
+        <StopMarker
           key={pt.Id ?? pIdx}
-          position={{ lat: Number(pt.Latitude__c), lng: Number(pt.Longitude__c) }}
-          label={{
-            text: String(pIdx + 1),
-            color: '#fff',
-            fontSize: '11px',
-            fontWeight: '700',
-          }}
-          icon={{
-            path: window.google?.maps?.SymbolPath?.CIRCLE ?? 0,
-            scale: 16,
-            fillColor: color,
-            fillOpacity: 1,
-            strokeColor: '#fff',
-            strokeWeight: 2.5,
-          }}
+          pt={pt}
+          index={pIdx}
+          color={color}
           onClick={() => onSelectStop({ ...pt, _routeName: route.Name, _color: color, _googleRouteId: route.Id ?? route.id })}
         />
       ))}

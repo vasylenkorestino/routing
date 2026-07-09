@@ -4,13 +4,15 @@ let addToastFn = null;
 let idCounter = 0;
 
 /** Call from anywhere to show a toast */
-export function toast(message, type = 'error', duration = 6000) {
-  if (addToastFn) addToastFn({ id: ++idCounter, message, type, duration });
+export function toast(message, type = 'error', duration = 6000, action = null) {
+  if (addToastFn) addToastFn({ id: ++idCounter, message, type, duration, action });
 }
 
 toast.error = (msg, duration) => toast(msg, 'error', duration);
 toast.success = (msg, duration) => toast(msg, 'success', duration);
 toast.info = (msg, duration) => toast(msg, 'info', duration);
+/** Toast with an action button (e.g. Undo). action = { label, onClick } */
+toast.action = (msg, action, duration = 5000) => toast(msg, 'info', duration, action);
 
 const ICONS = {
   error: (
@@ -62,6 +64,14 @@ function ToastItem({ toast: t, onDismiss }) {
     >
       {ICONS[t.type] || ICONS.error}
       <p className="flex-1 text-[13px] text-txt leading-snug break-words">{t.message}</p>
+      {t.action && (
+        <button
+          className="shrink-0 text-[12px] font-semibold text-primary hover:underline px-1"
+          onClick={() => { t.action.onClick?.(); onDismiss(); }}
+        >
+          {t.action.label}
+        </button>
+      )}
       <button
         className="shrink-0 text-txt-secondary hover:text-txt text-sm leading-none mt-0.5"
         onClick={onDismiss}

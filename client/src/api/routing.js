@@ -56,6 +56,7 @@ export const chat = (body) => client.post('/chat', body).then((r) => r.data);
 export const chatAsync = (body) => client.post('/chat/async', body).then((r) => r.data);
 export const enhanceRoute = (body) => client.post('/enhance-route', body).then((r) => r.data);
 export const enhanceRouteAsync = (body) => client.post('/enhance-route/async', body).then((r) => r.data);
+export const suggestTicketCandidates = (body) => client.post('/enhance-route/ticket-candidates', body).then((r) => r.data);
 export const getAIJob = (id) => client.get(`/ai-jobs/${id}`).then((r) => r.data);
 export const approveRouteLogs = (body) => client.post('/enhance-route/approve', body).then((r) => r.data);
 export const getRouteLogs = (googleRouteId) => client.get(`/routing/route-logs/${googleRouteId}`).then((r) => r.data);

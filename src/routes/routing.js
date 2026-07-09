@@ -128,9 +128,24 @@ router.get('/map-data', wrap(async (req, res) => {
   res.json(await apexGet(conn, 'map-data', req.query));
 }));
 
+/** Clamps a numeric query param to a range; returns undefined when absent/invalid. */
+function clampNumber(value, min, max) {
+  const n = Number(value);
+  if (value == null || value === '' || Number.isNaN(n)) return undefined;
+  return Math.min(max, Math.max(min, n));
+}
+
 router.get('/tickets', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
-  res.json(await apexGet(conn, 'tickets', req.query));
+  const params = {
+    ...req.query,
+    minLat: clampNumber(req.query.minLat, -90, 90),
+    maxLat: clampNumber(req.query.maxLat, -90, 90),
+    minLng: clampNumber(req.query.minLng, -180, 180),
+    maxLng: clampNumber(req.query.maxLng, -180, 180),
+    limit: clampNumber(req.query.limit, 1, 1000),
+  };
+  res.json(await apexGet(conn, 'tickets', params));
 }));
 
 router.get('/shape-accounts', wrap(async (req, res) => {

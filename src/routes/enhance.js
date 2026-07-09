@@ -352,6 +352,191 @@ router.post('/async', (req, res) => {
   });
 });
 
+const TICKET_CANDIDATES_SYSTEM = `You are an AI route analyst for a UCO (Used Cooking Oil) collection company.
+You will receive a JSON object with:
+- route: route header info (name, date, driver)
+- stops: current stops on the route (ordered, with lat/lng, service type, gallons)
+- openTickets: open service tickets near the route area (with account name, ticket type, lat/lng, notes, opened date)
+
+TASK: Identify which openTickets are GOOD CANDIDATES to add to this route.
+
+DECISION FACTORS:
+- Geographic fit — the ticket should be along or near the route path, not a major detour
+- Same plaza/street as an existing stop = strong candidate
+- Older tickets = higher priority
+- Ticket type compatibility with the route's service types
+- Truck capacity (~1800 gal) — don't recommend more than the route can absorb
+
+Return ONLY valid JSON:
+{
+  "summary": "1-2 sentence overview",
+  "candidates": [{ "accountId": "...", "caseId": "...", "accountName": "...", "confidence": 0-100, "reason": "1 short sentence" }]
+}
+Only include tickets that genuinely fit (typically the top 3-10). Empty array if none fit.`;
+
+/**
+ * POST /api/enhance-route/ticket-candidates — async AI job that scores open
+ * tickets in the route's area as add-candidates. Returns { jobId }; poll
+ * GET /ai-jobs/:id for the result: { summary, candidates: [...] }.
+ */
+router.post('/ticket-candidates', (req, res) => {
+  const { googleRouteId, recordTypeName } = req.body || {};
+  if (!googleRouteId) return res.status(400).json({ error: 'googleRouteId is required' });
+
+  const owner = aiJobs.resolveOwner(req);
+  const job = aiJobs.create({ type: 'ticket-candidates', params: { googleRouteId }, owner });
+  res.status(202).json({ jobId: job.id, status: job.status });
+  publishJobProgress(job.id);
+
+  const t0 = Date.now();
+  const userName = req.driver?.name;
+
+  setImmediate(async () => {
+    const recorder = createRecorder();
+    try {
+      const conn = await getConnection();
+
+      aiJobs.updateProgress(job.id, { step: 'load', label: 'Loading route…', percent: 10 });
+      publishJobProgress(job.id);
+
+      const routeQuery = `
+        SELECT Id, Name, Service_Date__c, DriverName__c
+        FROM Google_Route__c WHERE Id = '${googleRouteId}'
+      `;
+      const routeRes = await recorder.wrap('Load Route', 'SOQL', () => conn.query(routeQuery), { input: routeQuery });
+      if (!routeRes.records.length) throw new Error('Route not found');
+      const gRoute = routeRes.records[0];
+
+      const stopsQuery = `
+        SELECT Id, AccountId__c, Account_Name__c, Priority__c, ServiceType__c,
+               LastGallonsCollected__c, Latitude__c, Longitude__c
+        FROM Route__c
+        WHERE Google_Route_Id__c = '${googleRouteId}' AND AccountId__c != null
+        ORDER BY Priority__c ASC
+      `;
+      const stopsRes = await recorder.wrap('Load Stops', 'SOQL', () => conn.query(stopsQuery), { input: stopsQuery });
+      const stops = stopsRes.records;
+      if (!stops.length) throw new Error('Route has no stops to analyze');
+
+      const lats = stops.map((s) => Number(s.Latitude__c)).filter(Number.isFinite);
+      const lngs = stops.map((s) => Number(s.Longitude__c)).filter(Number.isFinite);
+      if (!lats.length) throw new Error('Route stops have no coordinates');
+
+      const PAD = 0.15; // ~10 miles bounding box padding
+      const minLat = Math.min(...lats) - PAD;
+      const maxLat = Math.max(...lats) + PAD;
+      const minLng = Math.min(...lngs) - PAD;
+      const maxLng = Math.max(...lngs) + PAD;
+      const stopAccountIds = stops.map((s) => s.AccountId__c).filter(Boolean);
+      const excludeIds = stopAccountIds.map((id) => `'${id}'`).join(',');
+
+      aiJobs.updateProgress(job.id, { step: 'tickets', label: 'Finding open tickets in the route area…', percent: 30 });
+      publishJobProgress(job.id);
+
+      const rtFilter = recordTypeName
+        ? `AND RecordType.Name = '${String(recordTypeName).replace(/'/g, '')}'`
+        : `AND RecordType.Name IN ('LRS', 'EZG', 'LNC', 'ENJ')`;
+      const ticketsQuery = `
+        SELECT Id, CaseNumber, AccountId, Type, Notes__c, isFuture__c, CreatedDate,
+               Account.Name, Account.ShippingStreet, Account.ShippingCity, Account.ShippingState,
+               Account.MALatitude__c, Account.MALongitude__c
+        FROM Case
+        WHERE Status = 'Open'
+          AND (Account.Account_Status__c = 'Active' OR Account.Account_Status__c = 'GTC Only' OR Account.Account_Status__c = 'Service-to-Service')
+          ${rtFilter}
+          AND Type = 'UCO Collection'
+          AND isFuture__c = false
+          AND Account.MALatitude__c >= ${minLat} AND Account.MALatitude__c <= ${maxLat}
+          AND Account.MALongitude__c >= ${minLng} AND Account.MALongitude__c <= ${maxLng}
+          ${excludeIds ? `AND AccountId NOT IN (${excludeIds})` : ''}
+        ORDER BY CreatedDate ASC
+        LIMIT 80
+      `;
+      const ticketsRes = await recorder.wrap('Find Area Tickets', 'SOQL', () => conn.query(ticketsQuery), { input: ticketsQuery });
+      const openTickets = (ticketsRes.records || []).map((c) => ({
+        caseId: c.Id,
+        accountId: c.AccountId,
+        accountName: c.Account?.Name,
+        ticketType: c.isFuture__c ? 'Future Services' : c.Type,
+        openedAt: c.CreatedDate,
+        notes: c.Notes__c,
+        lat: c.Account?.MALatitude__c,
+        lng: c.Account?.MALongitude__c,
+        address: [c.Account?.ShippingStreet, c.Account?.ShippingCity, c.Account?.ShippingState].filter(Boolean).join(', '),
+      }));
+
+      if (!openTickets.length) {
+        const empty = { summary: 'No open tickets found in the route area.', candidates: [], areaTickets: 0 };
+        aiJobs.complete(job.id, empty);
+        publishJobProgress(job.id, { status: 'complete' });
+        return;
+      }
+
+      aiJobs.updateProgress(job.id, { step: 'ai', label: `Scoring ${openTickets.length} tickets with AI…`, percent: 55 });
+      publishJobProgress(job.id);
+
+      const payload = {
+        route: { id: gRoute.Id, name: gRoute.Name, date: gRoute.Service_Date__c, driver: gRoute.DriverName__c },
+        stops: stops.map((s) => ({
+          accountId: s.AccountId__c,
+          accountName: s.Account_Name__c,
+          priority: s.Priority__c,
+          serviceType: s.ServiceType__c,
+          lastGallons: s.LastGallonsCollected__c,
+          lat: s.Latitude__c,
+          lng: s.Longitude__c,
+        })),
+        openTickets,
+      };
+
+      const client = new Anthropic({ apiKey: config.apiKey });
+      const aiResponse = await recorder.wrap(
+        'AI Ticket Scoring',
+        'AI Call',
+        () => client.messages.create({
+          model: config.model,
+          max_tokens: config.maxTokens,
+          system: TICKET_CANDIDATES_SYSTEM,
+          messages: [{ role: 'user', content: JSON.stringify(payload) }],
+        }),
+        { prompt: TICKET_CANDIDATES_SYSTEM, input: payload },
+      );
+
+      const aiText = aiResponse.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+      let analysis;
+      try {
+        const cleaned = aiText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        analysis = JSON.parse(cleaned);
+      } catch {
+        throw new Error('AI returned invalid JSON');
+      }
+
+      // Only keep candidates that refer to real area tickets.
+      const byAccount = new Map(openTickets.map((t) => [t.accountId, t]));
+      const candidates = (analysis.candidates || [])
+        .filter((c) => c?.accountId && byAccount.has(c.accountId))
+        .map((c) => ({
+          accountId: c.accountId,
+          caseId: c.caseId || byAccount.get(c.accountId).caseId,
+          accountName: c.accountName || byAccount.get(c.accountId).accountName,
+          confidence: c.confidence ?? 0,
+          reason: c.reason || '',
+        }));
+
+      const result = { summary: analysis.summary || '', candidates, areaTickets: openTickets.length };
+      aiJobs.complete(job.id, result);
+      publishJobProgress(job.id, { status: 'complete' });
+      logAction({ action: 'AI Ticket Candidates', status: 'Success', requestBody: { googleRouteId }, responseBody: result, aiPrompt: TICKET_CANDIDATES_SYSTEM, aiResponse: aiText, durationMs: Date.now() - t0, userInfo: userName, googleRouteId, source: 'POST /enhance-route/ticket-candidates', steps: recorder.steps });
+    } catch (err) {
+      aiJobs.fail(job.id, err);
+      publishJobProgress(job.id, { status: 'error', error: err.message });
+      logAction({ action: 'AI Ticket Candidates', status: 'Error', requestBody: req.body, responseBody: err.message, durationMs: Date.now() - t0, userInfo: userName, googleRouteId, source: 'POST /enhance-route/ticket-candidates', steps: recorder.steps });
+      logErrorToSalesforce({ errorType: 'AITicketCandidatesError', errorMessage: err.message, stackTrace: err.stack, source: 'enhance-route/ticket-candidates' });
+      logger.error('[ticket-candidates] job failed', { jobId: job.id, error: err.message });
+    }
+  });
+});
+
 /**
  * POST /api/enhance-route/approve — apply manager decisions to RouteLog__c.
  *

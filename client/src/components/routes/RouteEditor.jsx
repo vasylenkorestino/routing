@@ -2,13 +2,14 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import useStore from '../../store';
 import * as routingApi from '../../api/routing';
-import { getLastServices } from '../../api/routing';
 import AccountTicketSearch from '../shared/AccountTicketSearch';
 import Select from '../ui/Select';
 import { OverlaySpinner } from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 import { optimizeStopOrder } from '../../utils/clientOptimize';
+import { SERVICE_TYPES } from '../../utils/serviceTypes';
+import StopEditFields from './StopEditFields';
 
 function reorder(list, startIndex, endIndex) {
   const result = Array.from(list);
@@ -16,17 +17,6 @@ function reorder(list, startIndex, endIndex) {
   result.splice(endIndex, 0, removed);
   return result;
 }
-
-const SERVICE_TYPES = ['UCO Collection', 'Container Service', 'Grease Trap Service', 'Rotisserie Water'];
-const SUB_TYPES = {
-  'Container Service': [
-    'Automated System', 'Deliver Container', 'Deliver Oil Caddy',
-    'Pressure Washing', 'Relocate Container', 'Remove Container',
-    'Remove FSP Container', 'Replace Container', 'Replace Grill',
-    'Replace Key', 'Replace Lock',
-  ],
-  'Grease Trap Service': ['Grease Trap Cleaning', 'Line Jetting'],
-};
 
 /** Build a Route__c-compatible payload for a single waypoint */
 function buildRoutePoint(w, index, route, routeName, serviceDate) {
@@ -381,116 +371,20 @@ export default function RouteEditor() {
   );
 }
 
-/** Expanded row — edit fields + last services */
+/** Expanded row — edit fields + last services (shared with the map Layers list). */
 function ExpandedRow({ wp, idx, updateWaypoint }) {
-  const [services, setServices] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!wp.AccountId__c) return;
-    let cancelled = false;
-    setLoading(true);
-    getLastServices(wp.AccountId__c)
-      .then((res) => { if (!cancelled) setServices(res.services ?? res ?? []); })
-      .catch(() => { if (!cancelled) setServices([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [wp.AccountId__c]);
-
   return (
-    <div className="flex gap-4 p-3">
-      {/* Edit fields */}
-      <div className="flex flex-col gap-2 w-[260px] shrink-0">
-        <Field label="Service Type">
-          <select
-            className="input-field w-full text-[12px]"
-            value={wp.ServiceType__c || 'UCO Collection'}
-            onChange={(e) => { updateWaypoint(idx, 'ServiceType__c', e.target.value); updateWaypoint(idx, 'ServiceSubType__c', ''); }}
-          >
-            {SERVICE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </Field>
-        {SUB_TYPES[wp.ServiceType__c] && (
-          <Field label="Sub Type">
-            <select className="input-field w-full text-[12px]" value={wp.ServiceSubType__c || ''} onChange={(e) => updateWaypoint(idx, 'ServiceSubType__c', e.target.value)}>
-              <option value="">-- None --</option>
-              {SUB_TYPES[wp.ServiceType__c].map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </Field>
-        )}
-        <Field label="Notes">
-          <textarea className="input-field w-full text-[12px] h-[100px] resize-y" value={wp.Notes__c || ''} onChange={(e) => updateWaypoint(idx, 'Notes__c', e.target.value)} placeholder="Notes…" />
-        </Field>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] font-medium transition cursor-pointer flex-1 ${
-              wp.isFull__c
-                ? 'border-warning bg-warning/10 text-warning'
-                : 'border-border bg-bg text-txt-secondary hover:border-txt-secondary/40'
-            }`}
-            onClick={() => updateWaypoint(idx, 'isFull__c', !wp.isFull__c)}
-          >
-            <div className={`relative w-8 h-[18px] rounded-full transition-colors ${wp.isFull__c ? 'bg-warning' : 'bg-border'}`}>
-              <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${wp.isFull__c ? 'left-[16px]' : 'left-[2px]'}`} />
-            </div>
-            Is Full
-          </button>
-          <button
-            type="button"
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] font-medium transition cursor-pointer flex-1 ${
-              wp.Fixed_point__c
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'border-border bg-bg text-txt-secondary hover:border-txt-secondary/40'
-            }`}
-            onClick={() => updateWaypoint(idx, 'Fixed_point__c', !wp.Fixed_point__c)}
-          >
-            <div className={`relative w-8 h-[18px] rounded-full transition-colors ${wp.Fixed_point__c ? 'bg-primary' : 'bg-border'}`}>
-              <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${wp.Fixed_point__c ? 'left-[16px]' : 'left-[2px]'}`} />
-            </div>
-            Fixed
-          </button>
-        </div>
-      </div>
-
-      {/* Last services */}
-      <div className="flex-1 min-w-0 overflow-auto">
-        <div className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wider mb-1">Last Services</div>
-        {loading && <div className="text-xs text-txt-secondary animate-pulse py-2">Loading…</div>}
-        {!loading && services && services.length === 0 && <div className="text-xs text-txt-secondary py-2">No service history</div>}
-        {!loading && services && services.length > 0 && (
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr className="bg-bg/50">
-                <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Ref#</th>
-                <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Code</th>
-                <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Date</th>
-                <th className="text-right px-2 py-1 font-semibold text-txt-secondary">Gal.</th>
-                <th className="text-left px-2 py-1 font-semibold text-txt-secondary">Driver Notes</th>
-                <th className="text-left px-2 py-1 font-semibold text-txt-secondary">By</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {services.slice(0, 10).map((s, i) => (
-                <tr key={s.Id ?? i} className="hover:bg-bg/40">
-                  <td className="px-2 py-1 text-txt">{s.Name ?? '—'}</td>
-                  <td className="px-2 py-1">
-                    {s.Code__c ? <span className="text-[10px] font-semibold bg-primary/10 text-primary px-1.5 py-0.5 rounded">{s.Code__c}</span> : '—'}
-                  </td>
-                  <td className="px-2 py-1 text-txt tabular-nums">{s.Service_Date__c ?? '—'}</td>
-                  <td className="px-2 py-1 text-txt tabular-nums text-right font-medium">{s.Qty_Gallons__c ?? '—'}</td>
-                  <td className="px-2 py-1 text-txt-secondary max-w-[100px] truncate" title={s.DriverNotes__c}>{s.DriverNotes__c ?? '—'}</td>
-                  <td className="px-2 py-1 text-txt">{s.ServicedBy__c ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
+    <StopEditFields
+      values={wp}
+      onChange={(field, value) => updateWaypoint(idx, field, value)}
+      accountId={wp.AccountId__c}
+      accountName={wp.Account_Name__c}
+      layout="row"
+    />
   );
 }
 
+/** Labeled field wrapper for the route settings header (Driver/Start/End). */
 function Field({ label, children, className = '' }) {
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>

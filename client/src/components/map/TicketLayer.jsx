@@ -6,19 +6,11 @@ import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 import TicketDetailFields from '../shared/TicketDetailFields';
 import { ticketHasCoords, ticketLat, ticketLng, ticketNotes } from '../../utils/ticket';
+import { formatMiles } from '../../utils/routeDistance';
+import { ticketMarkerIcon } from '../../utils/ticketMarker';
+import useOffRouteDistances, { ticketKey } from '../../hooks/useOffRouteDistances';
 
-const TICKET_COLORS = {
-  'Deliver Container': '#2563eb',
-  'Grease Trap Cleaning': '#ec4899',
-  'Pressure Washing': '#f59e0b',
-  'Relocate Container': '#22c55e',
-  'Remove Container': '#14b8a6',
-  'Remove FSP Container': '#6366f1',
-  'Replace Container': '#8b5cf6',
-  'Replace Grill': '#a855f7',
-  'Rotisserie Water': '#22c55e',
-  'UCO Collection': '#f97316',
-};
+const EMPTY_CANDIDATES = {};
 
 /** Ticket markers on map — Account objects with Description = ticket type */
 export default function TicketLayer({ tickets = [] }) {
@@ -31,6 +23,11 @@ export default function TicketLayer({ tickets = [] }) {
   const focusTicketId = useStore((s) => s.focusTicketId);
   const clearFocusTicket = useStore((s) => s.clearFocusTicket);
   const showTicketOnMap = useStore((s) => s.showTicketOnMap);
+  const ticketsIsolated = useStore((s) => s.ticketsIsolated);
+  const candidates = useStore((s) =>
+    (s.routeId && s.ticketCandidates[s.routeId]?.byAccountId) || EMPTY_CANDIDATES);
+  const visibleTicketTypes = useStore((s) => s.visibleTicketTypes);
+  const distances = useOffRouteDistances(tickets);
   const handleClose = useCallback(() => setSelected(null), []);
 
   useEffect(() => {
@@ -73,25 +70,31 @@ export default function TicketLayer({ tickets = [] }) {
     setSelected(ticket);
   }, [showTicketOnMap]);
 
-  const valid = tickets.filter(ticketHasCoords);
+  // Only render markers for ticket types the user has enabled (eye toggle). In
+  // isolated mode (single notification ticket) the visibility filter is skipped.
+  const valid = tickets.filter(
+    (t) => ticketHasCoords(t) && (ticketsIsolated || visibleTicketTypes[t.Description]),
+  );
 
   return (
     <>
       {valid.map((t, i) => {
-        const color = TICKET_COLORS[t.Description] ?? '#64748b';
+        const candidate = candidates[t.Id];
+        const mi = distances.get(ticketKey(t));
+        const tooltip = [
+          t.Name,
+          t.Description,
+          mi != null ? `≈${formatMiles(mi)} off route` : null,
+          candidate ? `✦ AI suggested (${candidate.confidence ?? 0}%)` : null,
+        ].filter(Boolean).join(' · ');
         return (
           <Marker
-            key={t.Id ?? i}
+            key={ticketKey(t) ?? i}
             position={{ lat: Number(ticketLat(t)), lng: Number(ticketLng(t)) }}
             onClick={() => setSelected(t)}
-            icon={{
-              path: window.google?.maps?.SymbolPath?.BACKWARD_CLOSED_ARROW ?? 3,
-              fillColor: color,
-              fillOpacity: 0.9,
-              strokeColor: '#fff',
-              strokeWeight: 1.5,
-              scale: 5,
-            }}
+            title={tooltip}
+            zIndex={candidate ? 5000 : undefined}
+            icon={ticketMarkerIcon(t.Description, { candidate: !!candidate })}
           />
         );
       })}
@@ -118,6 +121,11 @@ export default function TicketLayer({ tickets = [] }) {
               </div>
             )}
             <TicketDetailFields ticket={selected} variant="popup" />
+            {candidates[selected.Id]?.reason && (
+              <div style={{ fontSize: 11, color: '#7c3aed', marginTop: 4, fontWeight: 500 }}>
+                ✦ AI: {candidates[selected.Id].reason}
+              </div>
+            )}
             {ticketNotes(selected) && (
               <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{ticketNotes(selected)}</div>
             )}

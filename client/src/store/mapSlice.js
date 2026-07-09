@@ -14,6 +14,12 @@ function notificationToTicket(n) {
   };
 }
 
+/** Max tickets kept in the merged layer cache (oldest dropped first). */
+const TICKET_CACHE_CAP = 1000;
+
+/** Ticket type shown/loaded by default; all others are opt-in via the eye toggle. */
+export const DEFAULT_TICKET_TYPE = 'UCO Collection';
+
 /** Map slice — layer visibility, per-route visibility, map viewport */
 const mapSlice = (set, get) => ({
   layers: {
@@ -30,6 +36,67 @@ const mapSlice = (set, get) => ({
   focusTicketId: null,
   /** True when tickets layer shows only one notification ticket (not full open-tickets list) */
   ticketsIsolated: false,
+  /** Stop Id hovered in a list or on the map, and where the hover originated ('list' | 'map') */
+  hoveredStopId: null,
+  hoveredStopSource: null,
+  /** Sticky stop selection from a list row click */
+  selectedStopId: null,
+  /** Current map viewport { minLat, maxLat, minLng, maxLng, zoom } — updated on map idle */
+  mapBounds: null,
+  /** Ticket types visible on the map (also drives which types are fetched). UCO only by default. */
+  visibleTicketTypes: { [DEFAULT_TICKET_TYPE]: true },
+  /** AI ticket suggestions keyed by routeId -> { byAccountId: { [accountId]: { confidence, reason } }, at } */
+  ticketCandidates: {},
+
+  setHoveredStopId: (hoveredStopId, source = 'list') =>
+    set({ hoveredStopId, hoveredStopSource: hoveredStopId ? source : null }),
+
+  setSelectedStopId: (id) =>
+    set((s) => ({ selectedStopId: s.selectedStopId === id ? null : id })),
+
+  setMapBounds: (mapBounds) => set({ mapBounds }),
+
+  /** Flips a ticket type's visibility on the map (the panel loads it on first show). */
+  toggleTicketTypeVisibility: (type) =>
+    set((s) => ({ visibleTicketTypes: { ...s.visibleTicketTypes, [type]: !s.visibleTicketTypes[type] } })),
+
+  setTicketTypeVisible: (type, visible) =>
+    set((s) => ({ visibleTicketTypes: { ...s.visibleTicketTypes, [type]: visible } })),
+
+  /** Resets visibility to the default (UCO only) — used when the tickets tab (re)loads. */
+  resetTicketTypeVisibility: () => set({ visibleTicketTypes: { [DEFAULT_TICKET_TYPE]: true } }),
+
+  /** Merges tickets into the layer cache by Id (existing entries refreshed, cap enforced). */
+  mergeTicketLayerData: (incoming = []) => {
+    if (!incoming.length) return;
+    set((s) => {
+      const byId = new Map(s.layers.tickets.data.map((t) => [t.CaseId ?? t.Id, t]));
+      incoming.forEach((t) => byId.set(t.CaseId ?? t.Id, t));
+      let data = [...byId.values()];
+      if (data.length > TICKET_CACHE_CAP) data = data.slice(data.length - TICKET_CACHE_CAP);
+      return { layers: { ...s.layers, tickets: { ...s.layers.tickets, data } } };
+    });
+  },
+
+  /** Caches AI candidate tickets for a route (list of { accountId, confidence, reason }). */
+  setTicketCandidates: (routeId, candidates = []) => {
+    if (!routeId) return;
+    const byAccountId = {};
+    candidates.forEach((c) => {
+      if (c?.accountId) byAccountId[c.accountId] = { confidence: c.confidence, reason: c.reason };
+    });
+    set((s) => ({ ticketCandidates: { ...s.ticketCandidates, [routeId]: { byAccountId, at: Date.now() } } }));
+  },
+
+  /** Drops cached AI candidates (stale after route stops change). */
+  clearTicketCandidates: (routeId) =>
+    set((s) => {
+      if (!routeId) return { ticketCandidates: {} };
+      if (!s.ticketCandidates[routeId]) return {};
+      const next = { ...s.ticketCandidates };
+      delete next[routeId];
+      return { ticketCandidates: next };
+    }),
 
   /** Pans the map to a ticket and optionally opens its marker popup */
   showTicketOnMap: ({ accountId, lat, lng }) => {
@@ -108,6 +175,18 @@ const mapSlice = (set, get) => ({
     }),
 
   isRouteVisible: (routeId) => !get().hiddenRouteIds[routeId],
+
+  /** Per-shape map visibility (empty = all shapes shown). */
+  hiddenShapeIds: {},
+
+  toggleShapeVisibility: (shapeId) =>
+    set((s) => {
+      const next = { ...s.hiddenShapeIds };
+      if (next[shapeId]) delete next[shapeId]; else next[shapeId] = true;
+      return { hiddenShapeIds: next };
+    }),
+
+  isShapeVisible: (shapeId) => !get().hiddenShapeIds[shapeId],
 
   setSelectedLayerTab: (selectedLayerTab) => set({ selectedLayerTab }),
   setSelectedShapeId: (selectedShapeId) => set({ selectedShapeId }),

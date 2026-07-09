@@ -22,10 +22,34 @@ export default function RoutingMap() {
   const route = useStore((s) => s.route);
   const compareRoutes = useStore((s) => s.compareRoutes);
   const serviceLocations = useStore((s) => s.serviceLocations);
+  const setMapBounds = useStore((s) => s.setMapBounds);
   const mapRef = useRef(null);
+  const boundsTimer = useRef(null);
   const [selectedSL, setSelectedSL] = useState(null);
 
   const onLoad = useCallback((map) => { mapRef.current = map; }, []);
+
+  /** Publishes the viewport (debounced) so layers can load data for the visible area. */
+  const onIdle = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    clearTimeout(boundsTimer.current);
+    boundsTimer.current = setTimeout(() => {
+      const b = map.getBounds();
+      if (!b) return;
+      const ne = b.getNorthEast();
+      const sw = b.getSouthWest();
+      setMapBounds({
+        minLat: sw.lat(),
+        maxLat: ne.lat(),
+        minLng: sw.lng(),
+        maxLng: ne.lng(),
+        zoom: map.getZoom(),
+      });
+    }, 400);
+  }, [setMapBounds]);
+
+  useEffect(() => () => clearTimeout(boundsTimer.current), []);
 
   const compareKey = (compareRoutes ?? []).map((r) => r.Id ?? r.id).join(',');
 
@@ -76,13 +100,14 @@ export default function RoutingMap() {
   }
 
   return (
-    <div className="relative w-full h-full">
-    <MapOverlayPanel />
+    <div className="relative w-full h-full flex">
+    <div className="relative flex-1 min-w-0 h-full">
     <GoogleMap
       mapContainerClassName="w-full h-full"
       center={mapCenter}
       zoom={mapZoom}
       onLoad={onLoad}
+      onIdle={onIdle}
       options={{
         zoomControl: true,
         streetViewControl: false,
@@ -138,6 +163,8 @@ export default function RoutingMap() {
         </InfoWindow>
       )}
     </GoogleMap>
+    </div>
+    <MapOverlayPanel />
     </div>
   );
 }
