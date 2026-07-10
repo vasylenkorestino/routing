@@ -30,7 +30,7 @@ export default function RouteCombiner() {
         startLocationId: startLoc, endLocationId: endLoc,
         dateOfService: route?.Service_Date__c, recordTypeName: route?.RecordType?.Name,
       });
-      await refreshRoutes();
+      await refreshRoutes({ selectNewRoute: true });
       closeModal('isCombine');
     } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); }

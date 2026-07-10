@@ -163,6 +163,16 @@ const bellSlice = (set, get) => ({
         }
       });
 
+      es.addEventListener('planning-progress', (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          const handler = get().onPlanningProgress;
+          if (typeof handler === 'function') handler(payload);
+        } catch (err) {
+          console.warn('[bellSlice] failed to parse planning-progress message', err.message);
+        }
+      });
+
       es.addEventListener('ai-progress', (e) => {
         try {
           const payload = JSON.parse(e.data);

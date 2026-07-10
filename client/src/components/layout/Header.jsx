@@ -72,6 +72,15 @@ function AIGenerateButton({ onClick, label = 'AI Generate' }) {
   );
 }
 
+/** "Plan Routes" button — opens the separate AI Route Planning workspace. */
+function PlanRoutesButton({ onClick }) {
+  return (
+    <button className="h-8 px-3 rounded-lg border border-ai text-ai text-[13px] font-medium hover:bg-ai/10 transition flex items-center gap-1 shrink-0" onClick={onClick}>
+      <span className="text-xs">✦</span> Plan
+    </button>
+  );
+}
+
 /** Generation-progress toggle — only visible while a job is running/finished. */
 function ProgressButton({ genStatus, genPanelOpen, onClick }) {
   if (genStatus === 'idle') return null;
@@ -140,6 +149,9 @@ export default function Header() {
       placeholder="All Routes"
       searchable
       className="min-w-[130px]"
+      // Pull any newly created routes in the background whenever the list opens,
+      // without changing the user's current selection or view.
+      onOpen={() => refreshRoutes()}
     />
   );
 
@@ -184,7 +196,7 @@ export default function Header() {
         </div>
         <RefreshButton onClick={() => refreshRoutes()} loading={isLoading} />
         <NewButton onClick={() => openModal('isNew')} />
-        <AIGenerateButton onClick={() => openModal('isAIGenerate')} label="AI" />
+        {/* AI Generate hidden for now (Plan workspace is desktop-only). */}
         <ProgressButton genStatus={genStatus} genPanelOpen={genPanelOpen} onClick={toggleGenPanel} />
         <BellMenu />
         {driver?.isAdmin && <SettingsButton onClick={() => navigate('/admin')} />}
@@ -217,7 +229,8 @@ export default function Header() {
       <div className="flex items-center gap-1.5">
         <RefreshButton onClick={() => refreshRoutes()} loading={isLoading} />
         <NewButton onClick={() => openModal('isNew')} />
-        <AIGenerateButton onClick={() => openModal('isAIGenerate')} />
+        {/* AI Generate hidden for now — replaced by the Plan workspace. */}
+        <PlanRoutesButton onClick={() => openModal('isPlanRoutes')} />
         <ProgressButton genStatus={genStatus} genPanelOpen={genPanelOpen} onClick={toggleGenPanel} />
       </div>
 

@@ -2,9 +2,11 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 
 /**
  * Custom dropdown select with search support.
- * @param {{ value, onChange, options: {value,label}[], placeholder?, searchable?, className? }} props
+ * `onOpen` fires each time the menu transitions from closed to open (e.g. to
+ * refresh options in the background).
+ * @param {{ value, onChange, options: {value,label}[], placeholder?, searchable?, className?, onOpen? }} props
  */
-export default function Select({ value, onChange, options = [], placeholder = 'Select…', searchable = false, className = '' }) {
+export default function Select({ value, onChange, options = [], placeholder = 'Select…', searchable = false, className = '', onOpen }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef(null);
@@ -21,6 +23,14 @@ export default function Select({ value, onChange, options = [], placeholder = 'S
     setOpen(false);
     setSearch('');
   }, [onChange]);
+
+  const toggleOpen = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      if (next) onOpen?.();
+      return next;
+    });
+  }, [onOpen]);
 
   useEffect(() => {
     if (!open) return;
@@ -53,7 +63,7 @@ export default function Select({ value, onChange, options = [], placeholder = 'S
             ? 'border-primary ring-2 ring-primary-light bg-surface'
             : 'border-border bg-surface hover:border-txt-secondary/40'
         }`}
-        onClick={() => setOpen(!open)}
+        onClick={toggleOpen}
       >
         <span className={`flex-1 truncate ${selected ? 'text-txt' : 'text-txt-secondary'}`}>
           {selected?.label ?? placeholder}

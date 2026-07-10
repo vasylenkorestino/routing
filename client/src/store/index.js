@@ -8,6 +8,7 @@ import mapSlice from './mapSlice';
 import aiSlice from './aiSlice';
 import bellSlice from './bellSlice';
 import generationSlice from './generationSlice';
+import planningSlice from './planningSlice';
 import aiJobSlice from './aiJobSlice';
 import compareSlice from './compareSlice';
 
@@ -23,6 +24,7 @@ const useStore = create(
       ...aiSlice(...a),
       ...bellSlice(...a),
       ...generationSlice(...a),
+      ...planningSlice(...a),
       ...aiJobSlice(...a),
       ...compareSlice(...a),
     }),
@@ -37,6 +39,9 @@ const useStore = create(
         serviceLocation: s.serviceLocation,
         routeId: s.routeId,
         panelMode: s.panelMode,
+        // Per-session route visibility so reopening the tab restores the user's
+        // own checkbox state instead of a computed default.
+        hiddenRouteIds: s.hiddenRouteIds,
       }),
     }
   )

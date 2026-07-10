@@ -40,7 +40,7 @@ export default function RouteSplitter() {
     setLoading(true);
     try {
       await routingApi.splitRoute({ googleRoute: { Id: route.Id }, accountIds: [...movedIds], recordTypeName: route.RecordType?.Name });
-      await refreshRoutes();
+      await refreshRoutes({ selectNewRoute: true });
       closeModal('isSplit');
     } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); }

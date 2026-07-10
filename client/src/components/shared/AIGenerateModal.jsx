@@ -42,7 +42,6 @@ export default function AIGenerateModal({ onClose }) {
 
         {mode === MODE_LOCATION ? (
           <LocationForm
-            recordTypes={recordTypes}
             serviceLocations={serviceLocations}
             serviceDate={serviceDate}
             onStart={startLocationGeneration}
@@ -62,19 +61,19 @@ export default function AIGenerateModal({ onClose }) {
 }
 
 /** New deterministic Service Location generation form. */
-function LocationForm({ recordTypes, serviceLocations, serviceDate, onStart, onClose }) {
+function LocationForm({ serviceLocations, serviceDate, onStart, onClose }) {
   const [form, setForm] = useState({
     date: serviceDate || '',
-    recordType: recordTypes?.[0] ?? '',
     depotScope: 'all', // 'all' | 'single'
     serviceLocationId: '',
     maxRadiusMiles: '',
     maxStops: 25,
-    minStopsPerRoute: 3,
+    minStopsPerRoute: 5,
     maxGallons: 1800,
-    maxDurationMin: 480,
+    maxDurationMin: '', // soft/optional — blank means "don't constrain"
     serviceTimeMin: 15,
   });
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const set = useCallback((key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value })), []);
@@ -86,13 +85,14 @@ function LocationForm({ recordTypes, serviceLocations, serviceDate, onStart, onC
     try {
       await onStart({
         date: form.date,
-        recordType: form.recordType || null,
+        recordType: null, // record type is derived from the selected service location
         serviceLocationId: form.depotScope === 'single' ? form.serviceLocationId : null,
         maxRadiusMiles: form.depotScope === 'single' && form.maxRadiusMiles ? Number(form.maxRadiusMiles) : null,
         maxStops: Number(form.maxStops),
         minStopsPerRoute: Number(form.minStopsPerRoute),
         maxGallons: Number(form.maxGallons),
-        maxDurationMin: Number(form.maxDurationMin),
+        // Only send a duration cap when the user explicitly set one (soft guidance).
+        maxDurationMin: form.maxDurationMin ? Number(form.maxDurationMin) : null,
         serviceTimeMin: Number(form.serviceTimeMin),
       });
       onClose?.();
@@ -104,17 +104,9 @@ function LocationForm({ recordTypes, serviceLocations, serviceDate, onStart, onC
 
   return (
     <>
-      <div className="flex gap-3 mb-3">
-        <Field label="Service Date" className="flex-1">
-          <input type="date" className="input-field" value={form.date} onChange={set('date')} />
-        </Field>
-        <Field label="Record Type" className="flex-1">
-          <select className="input-field" value={form.recordType} onChange={set('recordType')}>
-            <option value="">All</option>
-            {(recordTypes ?? []).map((rt) => <option key={rt} value={rt}>{rt}</option>)}
-          </select>
-        </Field>
-      </div>
+      <Field label="Service Date" className="mb-3">
+        <input type="date" className="input-field" value={form.date} onChange={set('date')} />
+      </Field>
 
       <Field label="Depot Scope" className="mb-3">
         <select className="input-field" value={form.depotScope} onChange={set('depotScope')}>
@@ -139,14 +131,25 @@ function LocationForm({ recordTypes, serviceLocations, serviceDate, onStart, onC
         </div>
       )}
 
-      <div className="text-[11px] font-semibold text-txt-secondary uppercase tracking-wide mb-2">Route Limits</div>
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <Field label="Min Stops / Route"><input type="number" min="1" className="input-field" value={form.minStopsPerRoute} onChange={set('minStopsPerRoute')} /></Field>
-        <Field label="Max Stops / Route"><input type="number" min="1" className="input-field" value={form.maxStops} onChange={set('maxStops')} /></Field>
-        <Field label="Max Gallons / Route"><input type="number" min="1" className="input-field" value={form.maxGallons} onChange={set('maxGallons')} /></Field>
-        <Field label="Max Duration (min)"><input type="number" min="30" className="input-field" value={form.maxDurationMin} onChange={set('maxDurationMin')} /></Field>
-        <Field label="Service Time / Stop (min)" className="col-span-2"><input type="number" min="0" className="input-field" value={form.serviceTimeMin} onChange={set('serviceTimeMin')} /></Field>
-      </div>
+      {/* Route limits are optional guidance — hidden behind a disclosure so the default flow stays simple. */}
+      <button
+        type="button"
+        className="flex items-center gap-1.5 text-[12px] font-medium text-txt-secondary hover:text-txt transition mb-2 bg-transparent border-none p-0"
+        onClick={() => setShowAdvanced((v) => !v)}
+      >
+        <span className={`transition-transform ${showAdvanced ? 'rotate-90' : ''}`}>▸</span>
+        Advanced settings (guidance)
+      </button>
+
+      {showAdvanced && (
+        <div className="grid grid-cols-2 gap-3 mb-4 p-3 rounded-lg bg-bg/40 border border-border/60">
+          <Field label="Min Stops / Route"><input type="number" min="1" className="input-field" value={form.minStopsPerRoute} onChange={set('minStopsPerRoute')} /></Field>
+          <Field label="Max Stops / Route"><input type="number" min="1" className="input-field" value={form.maxStops} onChange={set('maxStops')} /></Field>
+          <Field label="Max Gallons / Route"><input type="number" min="1" className="input-field" value={form.maxGallons} onChange={set('maxGallons')} /></Field>
+          <Field label="Service Time / Stop (min)"><input type="number" min="0" className="input-field" value={form.serviceTimeMin} onChange={set('serviceTimeMin')} /></Field>
+          <Field label="Max Duration (min, optional)" className="col-span-2"><input type="number" min="30" className="input-field" value={form.maxDurationMin} onChange={set('maxDurationMin')} placeholder="no limit" /></Field>
+        </div>
+      )}
 
       <Actions loading={loading} onClose={onClose} onGenerate={handleGenerate} label="Generate" />
     </>

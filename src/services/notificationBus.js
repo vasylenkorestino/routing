@@ -11,6 +11,7 @@ const EVENT_TICKET_TRIAGED = 'ticket-triaged';
 const EVENT_SF_CHANGED = 'sf-changed';
 const EVENT_GENERATION_PROGRESS = 'generation-progress';
 const EVENT_AI_PROGRESS = 'ai-progress';
+const EVENT_PLANNING_PROGRESS = 'planning-progress';
 
 /** Publishes a notification payload to all SSE subscribers. */
 function publish(event, payload) {
@@ -23,4 +24,4 @@ function subscribe(listener) {
   return () => bus.off('notification', listener);
 }
 
-module.exports = { publish, subscribe, EVENT_TICKET_TRIAGED, EVENT_SF_CHANGED, EVENT_GENERATION_PROGRESS, EVENT_AI_PROGRESS };
+module.exports = { publish, subscribe, EVENT_TICKET_TRIAGED, EVENT_SF_CHANGED, EVENT_GENERATION_PROGRESS, EVENT_AI_PROGRESS, EVENT_PLANNING_PROGRESS };

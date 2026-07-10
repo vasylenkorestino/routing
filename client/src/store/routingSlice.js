@@ -65,7 +65,7 @@ const routingSlice = (set, get) => ({
   clearAiSelection: () => set({ aiSelectedRouteIds: {} }),
 
   loadRoutingData: async (options = {}) => {
-    const { selectRouteId = null, skipTicketReset = false, skipDefaultRoute = false } = options;
+    const { selectRouteId = null, skipTicketReset = false, skipDefaultRoute = false, restoreVisibility = false } = options;
     const { serviceDate, recordType, serviceLocation } = get();
     set({ isLoading: true });
     try {
@@ -101,7 +101,18 @@ const routingSlice = (set, get) => ({
 
       get().setLayerData('routes', routes, false);
       if (selectedRoute) {
-        get().selectRoute(selectedRoute.Id ?? selectedRoute.id);
+        // On the first load after a session rehydrate, keep the user's own
+        // persisted visibility (pruned to the routes that still exist) instead
+        // of collapsing to just the selected route.
+        const validIds = new Set(routes.map((r) => r.Id ?? r.id));
+        const persisted = get().hiddenRouteIds || {};
+        const pruned = {};
+        Object.keys(persisted).forEach((id) => { if (validIds.has(id)) pruned[id] = true; });
+        if (restoreVisibility && Object.keys(pruned).length > 0) {
+          set({ hiddenRouteIds: pruned, compareMode: false, compareRoutes: [], compareDetail: null });
+        } else {
+          get().selectRoute(selectedRoute.Id ?? selectedRoute.id);
+        }
       } else {
         set({ hiddenRouteIds: {} });
       }
@@ -140,8 +151,18 @@ const routingSlice = (set, get) => ({
     }
   },
 
-  /** Re-fetches routes for current filters; keeps the selected route when it still exists. */
-  refreshRoutes: async () => {
+  /**
+   * Re-fetches routes for the current filters; keeps the selected route when it
+   * still exists.
+   *
+   * By default it does NOT change the user's selection — a route that newly
+   * appeared (e.g. created by another user in the meantime) must not hijack the
+   * current view. Callers that just created a route can opt in to adopting it:
+   *   - `selectNewRoute: true` — select the first route not present before.
+   *   - `expectedNewIds: [...]` — select the first matching id that appeared.
+   */
+  refreshRoutes: async (options = {}) => {
+    const { selectNewRoute = false, expectedNewIds = null } = options;
     const { serviceDate, recordType, serviceLocation, routeId, routes: oldRoutes } = get();
     set({ isLoading: true });
     try {
@@ -166,11 +187,20 @@ const routingSlice = (set, get) => ({
           return;
         }
       }
-      const oldIds = new Set(oldRoutes.map((r) => r.Id ?? r.id));
-      const newRoute = routes.find((r) => !oldIds.has(r.Id ?? r.id));
-      if (newRoute) {
-        set({ routeId: newRoute.Id ?? newRoute.id, route: newRoute });
-      } else if (routes.length > 0 && !routeId) {
+
+      // Only adopt a newly appeared route when the caller explicitly created one.
+      if (selectNewRoute || expectedNewIds) {
+        const oldIds = new Set(oldRoutes.map((r) => r.Id ?? r.id));
+        const newRoute = expectedNewIds
+          ? routes.find((r) => expectedNewIds.includes(r.Id ?? r.id))
+          : routes.find((r) => !oldIds.has(r.Id ?? r.id));
+        if (newRoute) {
+          set({ routeId: newRoute.Id ?? newRoute.id, route: newRoute });
+          return;
+        }
+      }
+
+      if (routes.length > 0 && !routeId) {
         set({ routeId: routes[0].Id ?? routes[0].id, route: routes[0] });
       } else if (routeId && !routes.some((r) => (r.Id ?? r.id) === routeId)) {
         set({ routeId: null, route: null });
@@ -193,7 +223,7 @@ const routingSlice = (set, get) => ({
     const intervalMs = 1500;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      await get().refreshRoutes();
+      await get().refreshRoutes({ expectedNewIds: routeIds });
       if (primaryId) {
         const found = get().routes.find((r) => (r.Id ?? r.id) === primaryId);
         if (found) {
@@ -328,28 +358,61 @@ function getId(o) {
   return o && (o.Id ?? o.id) ? o.Id ?? o.id : null;
 }
 
+/**
+ * True when a google_route webhook record still belongs to the active filters.
+ * Record type is not present in the webhook payload, so we match on the fields
+ * we do receive: service date and (when a specific one is selected) service
+ * location start/end. This keeps routes for other dates/locations out of view.
+ */
+function recordMatchesFilters(get, record) {
+  const { serviceDate, serviceLocation } = get();
+  const recDate = normalizeServiceDate(record.serviceDate);
+  if (serviceDate && recDate && recDate !== serviceDate) return false;
+  if (serviceLocation && serviceLocation !== 'All') {
+    const start = record.serviceLocationStart;
+    const end = record.serviceLocationEnd;
+    if ((start || end) && start !== serviceLocation && end !== serviceLocation) return false;
+  }
+  return true;
+}
+
+/** Removes a route from the list/layer and clears selection if it was selected. */
+function removeGoogleRoute(set, get, id) {
+  const current = get().routes || [];
+  const idx = current.findIndex((r) => getId(r) === id);
+  if (idx === -1) return;
+  const next = current.slice(0, idx).concat(current.slice(idx + 1));
+  const patch = { routes: next };
+  if (get().routeId === id) {
+    patch.routeId = null;
+    patch.route = null;
+  }
+  set(patch);
+  if (get().setLayerData) get().setLayerData('routes', next);
+}
+
 /** Upsert/remove a Google_Route__c header in the routes list. */
 function applyGoogleRoutePatch(set, get, event, record) {
   const id = record.id || record.Id;
   if (!id) return;
-  const current = get().routes || [];
-  const existingIdx = current.findIndex((r) => getId(r) === id);
 
   if (event === 'deleted') {
-    if (existingIdx === -1) return;
-    const next = current.slice(0, existingIdx).concat(current.slice(existingIdx + 1));
-    const patch = { routes: next };
-    if (get().routeId === id) {
-      patch.routeId = null;
-      patch.route = null;
-    }
-    set(patch);
-    if (get().setLayerData) get().setLayerData('routes', next);
+    removeGoogleRoute(set, get, id);
     return;
   }
 
+  // An update can move a route out of the current filters (e.g. its service
+  // date changed); drop it so the view only shows what matches the filters.
+  if (!recordMatchesFilters(get, record)) {
+    removeGoogleRoute(set, get, id);
+    return;
+  }
+
+  const current = get().routes || [];
+  const existingIdx = current.findIndex((r) => getId(r) === id);
+  const isNew = existingIdx === -1;
   const merged = mergeGoogleRoute(current[existingIdx], record);
-  const next = existingIdx === -1 ? [...current, merged] : current.map((r, i) => (i === existingIdx ? merged : r));
+  const next = isNew ? [...current, merged] : current.map((r, i) => (i === existingIdx ? merged : r));
   const colored = normalizeRoutes(next);
   const patch = { routes: colored };
   if (get().routeId === id) {
@@ -357,6 +420,15 @@ function applyGoogleRoutePatch(set, get, event, record) {
   }
   set(patch);
   if (get().setLayerData) get().setLayerData('routes', colored);
+
+  // A route created elsewhere must not grab focus or the map: land it hidden
+  // and let the user opt in from the Layers panel. A quiet toast signals it.
+  if (isNew) {
+    const hidden = { ...(get().hiddenRouteIds || {}) };
+    hidden[id] = true;
+    set({ hiddenRouteIds: hidden });
+    toast.info(`New route "${merged.Name || 'Untitled'}" was added`);
+  }
 }
 
 /** Upsert/remove a Route__c stop inside the parent Google_Route__c.Routes__r. */

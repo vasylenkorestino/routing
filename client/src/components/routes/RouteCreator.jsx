@@ -10,7 +10,7 @@ async function pollForNewRoutes(refreshRoutes, maxAttempts = 12, intervalMs = 30
   const initialCount = useStore.getState().routes.length;
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    await refreshRoutes();
+    await refreshRoutes({ selectNewRoute: true });
     if (useStore.getState().routes.length > initialCount) return;
   }
 }
@@ -144,7 +144,7 @@ export default function RouteCreator() {
 
         // Shapes generate asynchronously on Salesforce, so poll until they land.
         if (shapeIds.length > 0) await pollForNewRoutes(refreshRoutes, 12, 3000);
-        else await refreshRoutes();
+        else await refreshRoutes({ selectNewRoute: true });
 
         toast.success('Route created.');
       } catch (err) {
@@ -161,7 +161,7 @@ export default function RouteCreator() {
     setLoading(true);
     try {
       await routingApi.createRoutes({ name: routeName, selectedDate: date, recordTypeName: recType, serviceLocationId: svcLoc });
-      await refreshRoutes();
+      await refreshRoutes({ selectNewRoute: true });
       toast.success('Done! Route created.');
       closeModal('isNew');
     } catch (err) { toast.error(getErrorMessage(err)); }

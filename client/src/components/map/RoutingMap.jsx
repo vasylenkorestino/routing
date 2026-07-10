@@ -22,6 +22,7 @@ export default function RoutingMap() {
   const mapCenter = useStore((s) => s.mapCenter);
   const mapZoom = useStore((s) => s.mapZoom);
   const route = useStore((s) => s.route);
+  const routeId = useStore((s) => s.routeId);
   const compareRoutes = useStore((s) => s.compareRoutes);
   const compareMode = useStore((s) => s.compareMode);
   const serviceLocations = useStore((s) => s.serviceLocations);
@@ -56,7 +57,11 @@ export default function RoutingMap() {
 
   const compareKey = (compareRoutes ?? []).map((r) => r.Id ?? r.id).join(',');
 
-  /** Fit map bounds to the current route plus any selected comparison routes. */
+  /**
+   * Fit map bounds to the current route plus any selected comparison routes.
+   * Keyed on `routeId` (not the `route` object) so background SSE patches to the
+   * selected route's data don't re-fit and jump the user's viewport.
+   */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !route || !window.google) return;
@@ -83,7 +88,7 @@ export default function RoutingMap() {
     all.forEach((c) => bounds.extend(c));
     map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route, compareKey]);
+  }, [routeId, compareKey]);
 
   const validSLs = (serviceLocations ?? []).filter((sl) => {
     const lat = Number(sl.Latitude__c);

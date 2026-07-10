@@ -23,6 +23,8 @@ import AIGenerateModal from '../components/shared/AIGenerateModal';
 import AIEnhanceModal from '../components/routes/AIEnhanceModal';
 import GenerationProgressPanel from '../components/shared/GenerationProgressPanel';
 import GeneratedRoutesReview from '../components/shared/GeneratedRoutesReview';
+import PlanRoutesModal from '../components/shared/PlanRoutesModal';
+import RoutePlanningWorkspace from '../components/shared/RoutePlanningWorkspace';
 import Spinner from '../components/ui/Spinner';
 import useNotificationStream from '../hooks/useNotificationStream';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -228,11 +230,18 @@ export default function RoutingPage() {
   const isReviewOpen = useStore((s) => s.isReviewOpen);
   const isAIGenerate = useStore((s) => s.isAIGenerate);
   const isAIEnhance = useStore((s) => s.isAIEnhance);
+  const isPlanRoutes = useStore((s) => s.isPlanRoutes);
   const genReviewOpen = useStore((s) => s.genReviewOpen);
+  const planningOpen = useStore((s) => s.planningOpen);
 
+  const didInitialLoad = useRef(false);
   useEffect(() => {
     if (skipNextAutoLoad) return;
-    loadRoutingData();
+    const isInitial = !didInitialLoad.current;
+    didInitialLoad.current = true;
+    // Only the first load restores the persisted per-session visibility;
+    // later filter changes reset to the default single-route view.
+    loadRoutingData(isInitial ? { restoreVisibility: true } : {});
   }, [serviceDate, recordType, serviceLocation, skipNextAutoLoad]);
 
   useNotificationStream();
@@ -271,6 +280,8 @@ export default function RoutingPage() {
       {isAIGenerate && <AIGenerateModal onClose={() => useStore.getState().closeModal('isAIGenerate')} />}
       {isAIEnhance && <AIEnhanceModal />}
       {genReviewOpen && <GeneratedRoutesReview />}
+      {isPlanRoutes && <PlanRoutesModal onClose={() => useStore.getState().closeModal('isPlanRoutes')} />}
+      {planningOpen && <RoutePlanningWorkspace />}
     </div>
   );
 }
