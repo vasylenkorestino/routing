@@ -69,12 +69,17 @@ export default function RoutePlanningWorkspace() {
     [routes, days, activeDay],
   );
 
-  useEffect(() => {
-    if (!selectedId && dayRoutes.length) setSelectedId(dayRoutes[0].id);
-  }, [dayRoutes, selectedId]);
-
+  // Fallback to the first route for the detail panel only; the map highlights
+  // (dims others) only when the user has explicitly selected a route.
   const selectedRoute = useMemo(() => routes.find((r) => r.id === selectedId) || dayRoutes[0] || null, [routes, selectedId, dayRoutes]);
   const checkedRoutes = useMemo(() => dayRoutes.filter((r) => checked.has(r.id)), [dayRoutes, checked]);
+
+  // In Single mode, show only the selected route but pin its Day-view color.
+  const singleRoute = useMemo(() => {
+    if (!selectedRoute) return null;
+    const idx = dayRoutes.findIndex((r) => r.id === selectedRoute.id);
+    return { ...selectedRoute, _color: routeColor(idx >= 0 ? idx : 0) };
+  }, [selectedRoute, dayRoutes]);
 
   // Trace playback ticker.
   useEffect(() => {
@@ -305,9 +310,14 @@ export default function RoutePlanningWorkspace() {
                     {/* One persistent map for all views: toggling only shows/hides
                         routes, so the viewport (center/zoom) is preserved. */}
                     <RoutesOverviewMap
-                      routes={mapView === 'playback' ? (trace[playIndex]?.routes || []) : dayRoutes}
-                      selectedId={mapView === 'playback' ? null : selectedRoute?.id}
-                      hideUnselected={mapView === 'single'}
+                      routes={
+                        mapView === 'playback'
+                          ? (trace[playIndex]?.routes || [])
+                          : mapView === 'single'
+                            ? (singleRoute ? [singleRoute] : [])
+                            : dayRoutes
+                      }
+                      selectedId={mapView === 'overview' ? selectedId : null}
                       onSelectRoute={(id) => setSelectedId(id)}
                     />
                   </div>
