@@ -23,7 +23,7 @@ const TASK_MODES = {
     maxIterations: 3,
   },
   route_redesign: {
-    toolNames: ['route_enhancement', 'compare_routes', 'account_discovery', 'route_generation', 'route_edit_proposal', 'route_stops'],
+    toolNames: ['route_enhancement', 'compare_routes', 'service_due_analysis', 'account_discovery', 'route_generation', 'route_edit_proposal', 'route_stops'],
     maxIterations: 4,
   },
   route_edit: {
@@ -35,7 +35,7 @@ const TASK_MODES = {
     maxIterations: 2,
   },
   multi_route: {
-    toolNames: ['multi_route_context', 'account_discovery', 'route_generation', 'compare_routes', 'route_logger'],
+    toolNames: ['multi_route_context', 'service_due_analysis', 'account_discovery', 'route_generation', 'compare_routes', 'route_logger'],
     maxIterations: 4,
   },
   general: {

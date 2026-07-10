@@ -11,13 +11,15 @@
  *   discover eligible UCO accounts -> assign to nearest depot -> cluster by
  *   compass bearing -> split into soft-capacity bins -> TSP-optimize each bin.
  *
- * Eligibility (planning mode): Account_Status__c = 'Active', valid coordinates,
- * not already routed, and (UCO_Collection__c = true OR an open UCO Collection
- * priority ticket). Gallon estimates factor equipment + service history.
+ * Eligibility (planning mode): UCO_Collection__c = true, Account_Status__c =
+ * 'Active', valid coordinates, not already routed, and actually due for service
+ * per the shared serviceDue engine (UCOLastServiceDate__c + pickup frequency,
+ * with Service__c-history fallbacks and a Gross Gallons fill-rate model).
  */
 
 const { loadDepots, bearing, sectorFor } = require('./serviceLocationPlanner');
 const sf = require('../services/salesforce');
+const serviceDue = require('./serviceDue');
 const routeOptimizer = require('./routeOptimizer');
 const { haversine } = require('./distanceMatrix');
 const logger = require('../utils/logger');
@@ -42,7 +44,6 @@ const DEFAULTS = {
   defaultRadiusMiles: 40,
   maxRadiusMiles: 250,
   radiusGrowthFactor: 2,
-  gallonDuePct: 0.75, // predicted fill >= this fraction of capacity => likely due
 };
 
 const SECTOR_LABELS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
@@ -120,10 +121,10 @@ function dateRange(dateFrom, dateTo) {
 const ACCOUNT_FIELDS =
   'Id, Name, ShippingStreet, ShippingCity, ShippingState, ShippingCountry, ' +
   'MALatitude__c, MALongitude__c, UCO_Collection__c, Rotisserie_Collection__c, ' +
-  'Last_Service_Date__c, Expected_Date_Of_Service__c, Equipment_Type__c, ' +
-  'Container_Size_number__c, ContainerCapacity__c, Estimated_GPM__c, Number_Of_Fryers__c, ' +
+  'Last_Service_Date__c, UCOLastServiceDate__c, Expected_Date_Of_Service__c, Equipment_Type__c, ' +
+  'Tank_Size__c, Container_Size_number__c, ContainerCapacity__c, Estimated_GPM__c, Number_Of_Fryers__c, ' +
   'Pickup_Frequency_in_Days__c, Estimated_Pickup_Frequency__c, RelatedServiceLocation__c, ' +
-  "(SELECT Id, Qty_Gallons__c FROM Services__r WHERE RecordType.Name = 'UCO Collection' ORDER BY CreatedDate DESC LIMIT 3), " +
+  `${serviceDue.SERVICE_HISTORY_SUBQUERY}, ` +
   "(SELECT Id, Subject, Type FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' ORDER BY CreatedDate DESC LIMIT 3)";
 
 /** Attaches the derived flags the planner reasons about (tickets, service history). */
@@ -137,64 +138,21 @@ function decorateAccount(a) {
   };
 }
 
-/** Parses a pickup cadence (in days) from the numeric or text frequency fields. */
-function parseCadenceDays(a) {
-  const days = Number(a.Pickup_Frequency_in_Days__c);
-  if (Number.isFinite(days) && days > 0) return days;
-  const txt = String(a.Estimated_Pickup_Frequency__c || '').toLowerCase();
-  if (/week/.test(txt)) return /bi|two|2/.test(txt) ? 14 : 7;
-  if (/month/.test(txt)) return 30;
-  if (/quarter/.test(txt)) return 90;
-  const n = parseFloat(txt);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/** Adds N days to a YYYY-MM-DD (or ISO) date and returns YYYY-MM-DD. */
-function addDaysISO(dateStr, n) {
-  const d = new Date(`${String(dateStr).slice(0, 10)}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return toISODate(d);
-}
-
-/**
- * Predicts whether an account is likely to need UCO service by the target date,
- * using operational + historical signals (not just static flags):
- *   - an open UCO Collection ticket (always due),
- *   - a scheduled Expected_Date_Of_Service on/before the target,
- *   - cadence: last service + pickup frequency lands on/before the target,
- *   - accrual: predicted gallons since last service near container capacity.
- */
-function isLikelyDue(a, targetDate, opts) {
-  if (a._hasOpenTicket) return true;
-
-  const exp = a.Expected_Date_Of_Service__c;
-  if (exp && String(exp).slice(0, 10) <= targetDate) return true;
-
-  const last = a.Last_Service_Date__c ? String(a.Last_Service_Date__c).slice(0, 10) : null;
-  if (last) {
-    const cadence = parseCadenceDays(a);
-    if (cadence && addDaysISO(last, cadence) <= targetDate) return true;
-
-    // Gallon-accrual prediction from Service__c history + equipment.
-    const capacity = Number(a.ContainerCapacity__c) || Number(a.Container_Size_number__c);
-    const predicted = estGallons(a, targetDate, opts);
-    if (Number.isFinite(capacity) && capacity > 0 && predicted >= capacity * opts.gallonDuePct) return true;
-  }
-
-  return false;
-}
-
 /**
  * Finds accounts eligible for planning within the range, anchored on the selected
- * Service Location and expanding outward. Returns accounts JS-filtered to
- * (UCO_Collection true OR open UCO ticket), predicted to be due by the target date,
- * excluding any already on an incomplete Route__c in the window, sorted nearest-first.
+ * Service Location and expanding outward. Candidates are UCO_Collection__c = true
+ * accounts not already on an incomplete Route__c in the window; each is then
+ * evaluated individually by the shared serviceDue engine (UCOLastServiceDate__c +
+ * pickup frequency, with Service__c-history fallbacks) and only accounts actually
+ * due by the target date are returned (sorted nearest-first, with the evaluation
+ * attached as `_svc`). Accounts filtered out are returned as `exclusions`.
  *
  * @param {object} p
  * @param {{lat:number,lng:number}} [p.anchor] - Service Location coordinates to expand from.
  * @param {number} [p.radiusMiles] - bounding radius around the anchor (omitted => whole scope).
+ * @returns {Promise<{accounts: object[], exclusions: {byReason: object, sample: object[]}}>}
  */
-async function discoverAccounts({ dateFrom, dateTo, recordType, anchor = null, radiusMiles = null, opts = DEFAULTS }) {
+async function discoverAccounts({ dateFrom, dateTo, recordType, anchor = null, radiusMiles = null }) {
   const target = dateTo || dateFrom;
   const routed = await sf.query(
     `SELECT AccountId__c FROM Route__c ` +
@@ -205,7 +163,7 @@ async function discoverAccounts({ dateFrom, dateTo, recordType, anchor = null, r
 
   let soql =
     `SELECT ${ACCOUNT_FIELDS} FROM Account ` +
-    "WHERE Ignore_For_Routing__c = false AND Account_Status__c = 'Active' " +
+    "WHERE UCO_Collection__c = true AND Ignore_For_Routing__c = false AND Account_Status__c = 'Active' " +
     'AND MALatitude__c != null AND MALongitude__c != null ';
 
   if (recordType) soql += `AND RecordType.Name = '${escapeSoql(recordType)}' `;
@@ -219,20 +177,33 @@ async function discoverAccounts({ dateFrom, dateTo, recordType, anchor = null, r
       `AND MALatitude__c >= ${round2(anchor.lat - dLat)} AND MALatitude__c <= ${round2(anchor.lat + dLat)} ` +
       `AND MALongitude__c >= ${round2(anchor.lng - dLng)} AND MALongitude__c <= ${round2(anchor.lng + dLng)} `;
   }
-  soql += `AND (Expected_Date_Of_Service__c <= ${target} OR Expected_Date_Of_Service__c = null) `;
-  soql += 'ORDER BY Expected_Date_Of_Service__c ASC NULLS LAST LIMIT 5000';
+  soql += 'ORDER BY UCOLastServiceDate__c ASC NULLS FIRST LIMIT 5000';
 
   const rows = await sf.query(soql);
 
-  return rows
+  const candidates = rows
     .filter((a) => !alreadyRouted.has(a.Id))
     .map(decorateAccount)
     .map((a) => ({ ...a, _distMi: anchor ? round2(haversine(anchor, pt(a))) : null }))
     // Bounding box is square; enforce the true circular radius here.
-    .filter((a) => !(anchor && radiusMiles) || a._distMi <= radiusMiles)
-    .filter((a) => a.UCO_Collection__c === true || a._hasOpenTicket)
-    .filter((a) => isLikelyDue(a, target, opts))
-    .sort((x, y) => (x._distMi ?? 0) - (y._distMi ?? 0));
+    .filter((a) => !(anchor && radiusMiles) || a._distMi <= radiusMiles);
+
+  const exclusions = { byReason: {}, sample: [] };
+  const due = [];
+  for (const a of candidates) {
+    const svc = serviceDue.evaluateAccount(a, dateFrom, target);
+    if (svc.due) {
+      due.push({ ...a, _svc: svc });
+    } else {
+      const key = svc.reason.startsWith('not_due_until') ? 'not_due_yet' : svc.reason;
+      exclusions.byReason[key] = (exclusions.byReason[key] || 0) + 1;
+      if (exclusions.sample.length < 50) {
+        exclusions.sample.push({ id: a.Id, name: a.Name, reason: svc.reason, nextDueDate: svc.nextDueDate });
+      }
+    }
+  }
+
+  return { accounts: due.sort((x, y) => (x._distMi ?? 0) - (y._distMi ?? 0)), exclusions };
 }
 
 /** Fetches specific accounts by Id with the fields the planner needs (used by regenerate). */
@@ -244,36 +215,20 @@ async function fetchAccountsByIds(ids) {
   return rows.map(decorateAccount);
 }
 
-/** Estimated gallons to collect at a stop, factoring equipment + service history. */
+/**
+ * Estimated gallons to collect at a stop. Delegates to the shared serviceDue
+ * engine (Gross Gallons fill-rate model capped at Tank_Size__c capacity, with
+ * GPM-accrual and history fallbacks).
+ */
 function estGallons(acct, targetDate, opts) {
-  const containerNum = Number(acct.Container_Size_number__c);
-  const capacity = Number(acct.ContainerCapacity__c);
-  const gpm = parseFloat(acct.Estimated_GPM__c);
-  const lastServiceGallons = Number(acct._lastGallons);
-
-  // Accrual since last service using estimated gallons/month.
-  if (Number.isFinite(gpm) && gpm > 0 && acct.Last_Service_Date__c) {
-    const last = new Date(`${acct.Last_Service_Date__c}T00:00:00Z`);
-    const target = new Date(`${targetDate}T00:00:00Z`);
-    const months = Math.max(0, (target - last) / (1000 * 60 * 60 * 24 * 30));
-    const accrued = gpm * months;
-    const cap = Number.isFinite(capacity) && capacity > 0
-      ? capacity
-      : (Number.isFinite(containerNum) && containerNum > 0 ? containerNum : accrued);
-    const est = Math.min(accrued, cap);
-    if (est > 0) return round2(est);
-  }
-
-  if (Number.isFinite(lastServiceGallons) && lastServiceGallons > 0) return lastServiceGallons;
-  if (Number.isFinite(containerNum) && containerNum > 0) return round2(containerNum * 0.75);
-  return opts.defaultGallons;
+  return serviceDue.estimateGallonsAtDate(acct, targetDate, { defaultGallons: opts.defaultGallons });
 }
 
 /**
  * Buckets accounts to the earliest eligible day within the range, avoiding
  * double-booking (an account is placed on exactly one day of the session).
- * Accounts with a specific Expected_Date_Of_Service__c land on that day (clamped
- * into the range); accounts with no expected date land on the first day.
+ * Accounts land on their computed next-due day (`_svc.nextDueDate`, clamped
+ * into the range); overdue or unevaluated accounts land on the first day.
  */
 function bucketByDay(accounts, days) {
   const first = days[0];
@@ -281,9 +236,9 @@ function bucketByDay(accounts, days) {
   const byDay = new Map(days.map((d) => [d, []]));
   for (const a of accounts) {
     let day = first;
-    const exp = a.Expected_Date_Of_Service__c;
-    if (exp) {
-      const e = String(exp).slice(0, 10);
+    const dueDate = a._svc?.nextDueDate;
+    if (dueDate) {
+      const e = String(dueDate).slice(0, 10);
       if (e < first) day = first;
       else if (e > last) continue; // out of range
       else day = days.find((d) => d >= e) || first;
@@ -377,17 +332,26 @@ function mergeUndersized(bins, targetDate, opts) {
 
 /** Builds an optimized mock route object for one group of accounts. */
 async function buildRoute(accounts, depot, sectorLabel, targetDate, opts, index) {
-  const stops = accounts.map((a) => ({
-    accountId: a.Id,
-    accountName: a.Name,
-    lat: Number(a.MALatitude__c),
-    lng: Number(a.MALongitude__c),
-    address: [a.ShippingStreet, a.ShippingCity, a.ShippingState].filter(Boolean).join(', '),
-    lastServiceDate: a.Last_Service_Date__c ? String(a.Last_Service_Date__c).slice(0, 10) : null,
-    estGallons: estGallons(a, targetDate, opts),
-    hasOpenTicket: !!a._hasOpenTicket,
-    ticketDriven: a.UCO_Collection__c !== true && !!a._hasOpenTicket,
-  }));
+  const stops = accounts.map((a) => {
+    // Evaluated at discovery; regenerate pools may not carry it, so evaluate lazily.
+    const svc = a._svc || serviceDue.evaluateAccount(a, targetDate, targetDate);
+    return {
+      accountId: a.Id,
+      accountName: a.Name,
+      lat: Number(a.MALatitude__c),
+      lng: Number(a.MALongitude__c),
+      address: [a.ShippingStreet, a.ShippingCity, a.ShippingState].filter(Boolean).join(', '),
+      lastServiceDate: svc.lastServiceDate,
+      nextDueDate: svc.nextDueDate,
+      frequencyDays: svc.effectiveFrequencyDays,
+      frequencySource: svc.frequencySource,
+      capacityGallons: svc.capacityGallons,
+      fillRatePerDay: svc.fillRatePerDay,
+      estGallons: estGallons(a, targetDate, opts),
+      hasOpenTicket: !!a._hasOpenTicket,
+      ticketDriven: false,
+    };
+  });
 
   const depotPt = { lat: depot.lat, lng: depot.lng };
   const opt = await routeOptimizer.optimize({
@@ -476,7 +440,6 @@ function snapshotRoute(r) {
 async function plan(params, onProgress = () => {}) {
   const opts = resolveOpts(params);
   opts.recordType = params.recordType || null;
-  opts.gallonDuePct = DEFAULTS.gallonDuePct;
   const days = dateRange(params.dateFrom, params.dateTo);
   // Only treat an explicit, positive number as a hard radius cap. null/undefined
   // means "no user cap" (previously Number(null)===0 excluded everything).
@@ -489,8 +452,8 @@ async function plan(params, onProgress = () => {}) {
   const trace = [];
   const allRoutes = [];
 
-  const emit = (step, label, percent) => {
-    const snap = { step, label, percent, counters: { ...counters }, routes: allRoutes.map(snapshotRoute), ts: Date.now() };
+  const emit = (step, label, percent, extra = null) => {
+    const snap = { step, label, percent, counters: { ...counters }, routes: allRoutes.map(snapshotRoute), ts: Date.now(), ...(extra || {}) };
     trace.push(snap);
     onProgress(snap);
   };
@@ -516,6 +479,7 @@ async function plan(params, onProgress = () => {}) {
   // we have enough to plan (or hit the ceiling). Explicit user radius disables growth.
   emit('discovering', 'Analyzing nearby accounts that need UCO service', 18);
   let accounts = [];
+  let exclusions = { byReason: {}, sample: [] };
   let radiusUsed = null;
   if (anchor) {
     let radius = explicitRadius || DEFAULTS.defaultRadiusMiles;
@@ -525,17 +489,21 @@ async function plan(params, onProgress = () => {}) {
     while (true) {
       radiusUsed = radius;
       // eslint-disable-next-line no-await-in-loop
-      accounts = await discoverAccounts({
-        dateFrom: days[0], dateTo: days[days.length - 1], recordType: opts.recordType, anchor, radiusMiles: radius, opts,
+      const discovered = await discoverAccounts({
+        dateFrom: days[0], dateTo: days[days.length - 1], recordType: opts.recordType, anchor, radiusMiles: radius,
       });
-      emit('discovering', `Found ${accounts.length} account(s) within ${radius} mi of ${anchor.name}`, 22);
+      accounts = discovered.accounts;
+      exclusions = discovered.exclusions;
+      emit('discovering', `Found ${accounts.length} account(s) due for service within ${radius} mi of ${anchor.name}`, 22);
       if (accounts.length >= enough || radius >= ceiling || explicitRadius) break;
       radius = Math.min(ceiling, Math.round(radius * DEFAULTS.radiusGrowthFactor));
     }
   } else {
-    accounts = await discoverAccounts({
-      dateFrom: days[0], dateTo: days[days.length - 1], recordType: opts.recordType, opts,
+    const discovered = await discoverAccounts({
+      dateFrom: days[0], dateTo: days[days.length - 1], recordType: opts.recordType,
     });
+    accounts = discovered.accounts;
+    exclusions = discovered.exclusions;
   }
 
   // Exclude accounts already fixed in preserved (manually-edited / committed) routes
@@ -543,7 +511,15 @@ async function plan(params, onProgress = () => {}) {
   const excludeIds = new Set((params.excludeAccountIds || []).map(String));
   if (excludeIds.size) accounts = accounts.filter((a) => !excludeIds.has(a.Id));
   counters.accountsFound = accounts.length;
-  emit('discovering', `Selected ${accounts.length} eligible account(s)${radiusUsed ? ` within ${radiusUsed} mi` : ''}`, 24);
+  counters.accountsExcluded = Object.values(exclusions.byReason).reduce((s, n) => s + n, 0);
+  const estimatedCount = accounts.filter((a) => a._svc?.frequencySource === 'estimated_from_history' || a._svc?.frequencySource === 'fill_rate').length;
+  emit(
+    'discovering',
+    `Selected ${accounts.length} account(s) due for service${radiusUsed ? ` within ${radiusUsed} mi` : ''} ` +
+    `(${counters.accountsExcluded} not due, ${estimatedCount} with AI-estimated frequency)`,
+    24,
+    { dueAnalysis: { excludedByReason: exclusions.byReason, excludedSample: exclusions.sample, estimatedFrequencyCount: estimatedCount } },
+  );
 
   if (accounts.length === 0) {
     warnings.push('No eligible accounts found near the selected Service Location for this range.');

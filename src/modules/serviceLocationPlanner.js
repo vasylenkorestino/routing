@@ -296,8 +296,10 @@ function splitByCapacity(sortedAccounts, opts) {
   return bins;
 }
 
-/** Estimated gallons to collect at a stop, from recent service history or a fallback. */
+/** Estimated gallons to collect at a stop: fill-rate estimate from account_discovery, then last collection, then fallback. */
 function estGallons(acct, opts) {
+  const est = Number(acct.estimatedGallons);
+  if (Number.isFinite(est) && est > 0) return est;
   const last = Number(acct.lastGallons);
   return Number.isFinite(last) && last > 0 ? last : opts.defaultGallons;
 }

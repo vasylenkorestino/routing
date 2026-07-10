@@ -97,6 +97,11 @@ SUCCESS METRICS TO TRACK:
 - Overflow events (tanks that exceeded capacity)
 - Total gallons collected (throughput)
 
+ACCOUNT ELIGIBILITY (service_due_analysis):
+- When determining which accounts require service, ALWAYS use service_due_analysis (or the due-filtered results of account_discovery). Never load every UCO Collection account.
+- Due = last UCO service date (UCOLastServiceDate__c, else newest UCO Collection Service__c.Service_Date__c) + pickup frequency (Estimated_Pickup_Frequency__c, else estimated from service history) lands on or before the target date. Tank fill-rate (Gross Gallons history vs Tank_Size__c) may pull service earlier.
+- Eligibility analysis is read-only: never create Cases/tickets or update Accounts while deciding who needs service.
+
 CORE DECISION LOGIC (per account):
 1. How fast does this account produce oil? (GPD)
 2. How full is the tank right now? (fill %)

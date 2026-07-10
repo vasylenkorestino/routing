@@ -1,6 +1,7 @@
 const SalesforceQuerySkill = require('./salesforceQuery');
 const RouteAnalysisSkill = require('./routeAnalysis');
 const AccountDiscoverySkill = require('./accountDiscovery');
+const ServiceDueAnalysisSkill = require('./serviceDueAnalysis');
 const RouteEnhancementSkill = require('./routeEnhancement');
 const RouteGenerationSkill = require('./routeGeneration');
 const RouteParametersSkill = require('./routeParameters');
@@ -25,6 +26,7 @@ class SkillRegistry {
       new SalesforceQuerySkill(),
       new RouteAnalysisSkill(),
       new AccountDiscoverySkill(),
+      new ServiceDueAnalysisSkill(),
       new RouteEnhancementSkill(),
       new RouteParametersSkill(),
       new GeoUtilsSkill(),
