@@ -16,9 +16,9 @@ const chipOffset = (w, h) => ({ x: -w / 2, y: -h - CHIP_OFFSET_PX });
 const centerOffset = (w, h) => ({ x: -w / 2, y: -h / 2 });
 
 /** Small time badge floating above a stop / depot marker. */
-function EtaChip({ node, onClick }) {
+function EtaChip({ node, onClick, isNext }) {
   const color = node.kind === 'stop' ? (node.status?.color ?? '#2563eb') : node.kind === 'start' ? '#10b981' : '#ef4444';
-  const prefix = node.kind === 'start' ? 'Start ' : node.kind === 'end' ? 'End ' : '';
+  const prefix = node.kind === 'start' ? 'Start ' : node.kind === 'end' ? 'End ' : isNext ? 'Next · ' : '';
   return (
     <OverlayViewF
       position={node.coord}
@@ -26,8 +26,12 @@ function EtaChip({ node, onClick }) {
       getPixelPositionOffset={chipOffset}
     >
       <div
-        className="px-1.5 py-0.5 rounded-full bg-white text-[10px] font-semibold whitespace-nowrap shadow-md cursor-pointer select-none tabular-nums"
-        style={{ border: `1.5px solid ${color}`, color: '#1f2937' }}
+        className="px-1.5 py-0.5 rounded-full bg-white text-[10px] font-semibold whitespace-nowrap cursor-pointer select-none tabular-nums"
+        style={{
+          border: isNext ? `2.5px solid ${color}` : `1.5px solid ${color}`,
+          color: '#1f2937',
+          boxShadow: isNext ? '0 0 0 3px rgba(37,99,235,0.35)' : '0 1px 3px rgba(0,0,0,0.2)',
+        }}
         onClick={onClick}
         title={node.name}
       >
@@ -77,7 +81,8 @@ export default function RouteTimelineMapLayer() {
     return () => listener.remove();
   }, [map]);
 
-  const { nodes } = useRouteTimeline(route);
+  const { nodes, nextStop } = useRouteTimeline(route);
+  const nextStopId = nextStop?.Id ?? null;
 
   // Mid-leg label positions on the decoded polyline (geographic midpoint fallback).
   const legLabels = useMemo(() => {
@@ -104,6 +109,7 @@ export default function RouteTimelineMapLayer() {
         <EtaChip
           key={`chip-${node.key}`}
           node={node}
+          isNext={node.kind === 'stop' && node.stop?.Id === nextStopId}
           onClick={node.kind === 'stop' && node.stop?.Id ? () => setSelectedStopId(node.stop.Id) : undefined}
         />
       ))}

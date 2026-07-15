@@ -9,7 +9,7 @@ const STOP_SUBQUERY =
   'FROM Routes__r WHERE AccountId__c != null ORDER BY Priority__c ASC)';
 
 const ROUTE_FIELDS =
-  'Id, Name, Service_Date__c, CreatedDate, DriverName__c, Total_Distance__c, Total_Time__c, ' +
+  'Id, Name, Service_Date__c, CreatedDate, DriverName__c, Total_Distance__c, Total_Time__c, Minutes__c, ' +
   'Gallons_Collected__c, CompletionStatus__c, Driver_Completed__c';
 
 /** Escapes a string for SOQL single-quoted literals. */

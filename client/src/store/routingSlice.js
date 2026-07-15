@@ -54,6 +54,10 @@ const routingSlice = (set, get) => ({
   sfInstanceUrl: null,
   aiSelectedRouteIds: {},
 
+  // Bumped to force a live-traffic re-fetch of route ETAs (timeline + map chips).
+  trafficRefreshNonce: 0,
+  refreshTraffic: () => set((s) => ({ trafficRefreshNonce: s.trafficRefreshNonce + 1 })),
+
   toggleRouteAiSelected: (routeId) =>
     set((s) => {
       const next = { ...s.aiSelectedRouteIds };

@@ -6,6 +6,8 @@ import { OverlaySpinner } from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 import { isRouteCompleted } from '../../utils/route';
+import { computeRouteDurations, fmtDuration } from '../../utils/routeDuration';
+import useRouteTimeline from '../../hooks/useRouteTimeline';
 
 /** Route header card — shows key metrics and action buttons for the selected route */
 export default function RouteCard({ route }) {
@@ -15,6 +17,9 @@ export default function RouteCard({ route }) {
   const refreshRoutes = useStore((st) => st.refreshRoutes);
   const drivers = useStore((st) => st.drivers);
   const [optimizing, setOptimizing] = useState(false);
+  // Next-stop ETA + last actual completion (in-progress routes only). Shares the
+  // Directions cache with the timeline/map layer for the selected route.
+  const { nextStopEta, lastCompletedAt } = useRouteTimeline(route);
 
   const driverName = useMemo(() => {
     if (route?.Driver__c) {
@@ -54,10 +59,12 @@ export default function RouteCard({ route }) {
     const distRaw = route.Total_Distance__c;
     const distNum = parseFloat(distRaw);
     const distStr = typeof distRaw === 'string' && distRaw.includes('mi') ? distRaw : (!isNaN(distNum) ? `${distNum.toFixed(1)} mi` : '—');
-    const timeStr = route.Total_Time__c || '—';
+    // Drive Time = Google optimization result; Total Time = drive + on-site service per stop.
+    const { driveTimeLabel, totalDurationMin } = computeRouteDurations(route);
     return [
       { label: 'Distance', value: distStr },
-      { label: 'Time', value: timeStr },
+      { label: 'Drive Time', value: driveTimeLabel || '—' },
+      { label: 'Total Time', value: fmtDuration(totalDurationMin) },
       { label: 'Stops', value: stops.length },
       { label: 'Gallons', value: totalGallons ? totalGallons.toFixed(1) : '—' },
       { label: 'Date', value: route.Service_Date__c || '—' },
@@ -139,6 +146,19 @@ export default function RouteCard({ route }) {
             <span className="text-xs font-bold text-txt tabular-nums">{m.value}</span>
           </div>
         ))}
+        {/* Live ETA — only while the route is still in progress. */}
+        {!routeCompleted && lastCompletedAt && (
+          <div className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-txt-secondary font-medium">Last Completed</span>
+            <span className="text-xs font-bold text-success tabular-nums">{lastCompletedAt}</span>
+          </div>
+        )}
+        {!routeCompleted && nextStopEta && (
+          <div className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-txt-secondary font-medium">Next Stop ETA</span>
+            <span className="text-xs font-bold text-primary tabular-nums">{nextStopEta}</span>
+          </div>
+        )}
       </div>
 
       {/* Actions — edit actions hidden once the route is completed; Compare always available */}

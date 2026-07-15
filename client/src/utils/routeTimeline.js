@@ -117,6 +117,41 @@ export function formatClock(ms) {
   });
 }
 
+/**
+ * Latest completed stop by LastModifiedDate, or null when none are completed.
+ * NOTE: Route__c has no dedicated completion timestamp (Service_Completed__c is a
+ * checkbox), so LastModifiedDate is used as a completion-time proxy — it can shift
+ * if the record is edited after being serviced.
+ */
+export function getLastCompletedStop(stops = []) {
+  let best = null;
+  stops.forEach((s) => {
+    if (!isCompletedStatus(s?.Status__c) || !s?.LastModifiedDate) return;
+    const ms = Date.parse(s.LastModifiedDate);
+    if (Number.isNaN(ms)) return;
+    if (!best || ms > best.ms) best = { stop: s, ms };
+  });
+  return best ? best.stop : null;
+}
+
+/** First not-yet-completed stop by Priority__c (the driver's next stop), or null. */
+export function getNextPendingStop(stops = []) {
+  return [...stops]
+    .sort((a, b) => (a?.Priority__c ?? 0) - (b?.Priority__c ?? 0))
+    .find((s) => !isCompletedStatus(s?.Status__c)) ?? null;
+}
+
+/** Clock label for a stop: "10:45 AM" for actual times, "est. 11:24 AM" for projections. */
+export function formatStopTimeLabel({ ms, isActual = false, timeZone = ROUTE_TIME_ZONE }) {
+  if (ms == null || Number.isNaN(ms)) return null;
+  const clock = new Date(ms).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone,
+  });
+  return isActual ? clock : `est. ${clock}`;
+}
+
 /** "12 min" / "1h 5m" for a leg duration in seconds. */
 export function formatLegDuration(sec) {
   const min = Math.max(1, Math.round(sec / 60));

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import useStore from '../store';
 import { slCoord } from '../utils/routeGeometry';
+import { getTodayET } from '../utils/date';
 import { getStopStatus, isCompletedStatus } from '../utils/stopStatus';
 import {
+  ROUTE_TIME_ZONE,
   SERVICE_TIME_MIN,
   anchorStartMs,
   coordsSignature,
@@ -11,6 +13,9 @@ import {
   formatClock,
   formatLegDuration,
   formatOffset,
+  formatStopTimeLabel,
+  getLastCompletedStop,
+  getNextPendingStop,
   orderedRouteStops,
   stopCoord,
 } from '../utils/routeTimeline';
@@ -18,13 +23,20 @@ import {
 /** Directions API limit: origin + 23 waypoints + destination per request. */
 const CHUNK_SIZE = 23;
 
+/** Live-traffic ETAs re-fetch on this cadence (also the cache-key bucket size). */
+const TRAFFIC_BUCKET_MS = 5 * 60 * 1000;
+
 /** Module-level caches shared by all hook instances (panel + map layer). */
 const legCache = new Map(); // signature -> number[] seconds per leg
 const inflight = new Map(); // signature -> Promise<number[]|null>
 const LEG_CACHE_CAP = 50;
 
-/** Per-leg drive seconds for one Directions request, or null on failure. */
-function requestChunkLegSeconds(origin, destination, waypoints = []) {
+/**
+ * Per-leg traffic-free drive seconds for one chunk, or null on failure.
+ * Uses `stopover: true` waypoints so Google returns one leg per stop — but that
+ * is also why this request never yields `duration_in_traffic` (see below).
+ */
+function requestChunkTypicalSeconds(origin, destination, waypoints = []) {
   return new Promise((resolve) => {
     if (!window.google?.maps) { resolve(null); return; }
     const ds = new google.maps.DirectionsService();
@@ -39,32 +51,80 @@ function requestChunkLegSeconds(origin, destination, waypoints = []) {
   });
 }
 
+/**
+ * Total live-traffic seconds for one chunk, or null when unavailable.
+ * Google only returns `duration_in_traffic` when the request has NO stopover
+ * waypoints, so we route through the same points as non-stopover (`via:`) —
+ * this collapses the chunk into a single traffic-aware leg total.
+ */
+function requestChunkTrafficTotal(origin, destination, waypoints = [], departureTime) {
+  return new Promise((resolve) => {
+    if (!window.google?.maps || !departureTime) { resolve(null); return; }
+    const ds = new google.maps.DirectionsService();
+    const req = {
+      origin,
+      destination,
+      travelMode: google.maps.TravelMode.DRIVING,
+      drivingOptions: { departureTime, trafficModel: 'bestguess' },
+    };
+    if (waypoints.length > 0) {
+      req.waypoints = waypoints.map((w) => ({ location: w, stopover: false }));
+    }
+    ds.route(req, (result, status) => {
+      const legs = status === 'OK' ? result?.routes?.[0]?.legs : null;
+      if (!legs?.length) { resolve(null); return; }
+      resolve(legs.reduce((sum, l) => sum + (l.duration_in_traffic?.value ?? l.duration?.value ?? 0), 0));
+    });
+  });
+}
+
+/**
+ * Per-leg drive seconds for one chunk. Without a departureTime this is just the
+ * typical per-leg durations. With one, we scale each leg by the chunk's live
+ * traffic ratio (trafficTotal / typicalTotal): stopover waypoints give per-leg
+ * granularity but no traffic, `via:` gives traffic but no per-leg split, so we
+ * combine both to get traffic-aware per-leg times in two requests per chunk.
+ */
+async function fetchChunkLegSeconds(origin, destination, waypoints, departureTime) {
+  const typical = await requestChunkTypicalSeconds(origin, destination, waypoints);
+  if (!typical || !departureTime) return typical;
+  const trafficTotal = await requestChunkTrafficTotal(origin, destination, waypoints, departureTime);
+  const typicalTotal = typical.reduce((a, b) => a + b, 0);
+  if (!trafficTotal || typicalTotal <= 0) return typical; // no live data → typical times
+  const ratio = trafficTotal / typicalTotal;
+  return typical.map((s) => Math.round(s * ratio));
+}
+
 /** Chunked Directions fetch of all leg durations for an ordered point list. */
-async function fetchLegSeconds(coords) {
+async function fetchLegSeconds(coords, departureTime = null) {
   if (coords.length < 2) return [];
   const chunks = [];
   for (let i = 0; i < coords.length - 1; i += CHUNK_SIZE) {
     const end = Math.min(i + CHUNK_SIZE + 1, coords.length);
-    chunks.push(requestChunkLegSeconds(coords[i], coords[end - 1], coords.slice(i + 1, end - 1)));
+    chunks.push(fetchChunkLegSeconds(coords[i], coords[end - 1], coords.slice(i + 1, end - 1), departureTime));
   }
   const results = await Promise.all(chunks);
   if (results.some((r) => r === null)) return null;
   return results.flat();
 }
 
-/** Cached + deduped leg durations for a coordinate signature. */
-function getLegSeconds(signature, coords) {
-  if (legCache.has(signature)) return Promise.resolve(legCache.get(signature));
-  if (inflight.has(signature)) return inflight.get(signature);
-  const p = fetchLegSeconds(coords).then((legs) => {
-    inflight.delete(signature);
+/**
+ * Cached + deduped leg durations for a cache key. The key is the coordinate
+ * signature for traffic-free routes, or signature + 5-minute time bucket for
+ * traffic-aware routes (so live ETAs refresh instead of freezing on a cache hit).
+ */
+function getLegSeconds(cacheKey, coords, departureTime = null) {
+  if (legCache.has(cacheKey)) return Promise.resolve(legCache.get(cacheKey));
+  if (inflight.has(cacheKey)) return inflight.get(cacheKey);
+  const p = fetchLegSeconds(coords, departureTime).then((legs) => {
+    inflight.delete(cacheKey);
     if (legs) {
-      legCache.set(signature, legs);
+      legCache.set(cacheKey, legs);
       if (legCache.size > LEG_CACHE_CAP) legCache.delete(legCache.keys().next().value);
     }
     return legs;
   });
-  inflight.set(signature, p);
+  inflight.set(cacheKey, p);
   return p;
 }
 
@@ -82,6 +142,8 @@ function getLegSeconds(signature, coords) {
  */
 export default function useRouteTimeline(route) {
   const serviceLocations = useStore((s) => s.serviceLocations);
+  const trafficRefreshNonce = useStore((s) => s.trafficRefreshNonce);
+  const refreshTraffic = useStore((s) => s.refreshTraffic);
 
   const { stops, startSL, endSL, coords, signature } = useMemo(() => {
     if (!route) return { stops: [], startSL: null, endSL: null, coords: [], signature: '' };
@@ -106,32 +168,78 @@ export default function useRouteTimeline(route) {
     };
   }, [route, serviceLocations]);
 
+  // Live traffic ("leave now") for today/future routes; past routes fall back to
+  // traffic-free typical times (Google rejects past departure times).
+  const useTraffic = !(route?.Service_Date__c && route.Service_Date__c < getTodayET());
+
+  // 5-minute bucket rotates the cache key and drives periodic live refresh.
+  const [trafficBucket, setTrafficBucket] = useState(() => Math.floor(Date.now() / TRAFFIC_BUCKET_MS));
+  useEffect(() => {
+    if (!useTraffic) return undefined;
+    const id = setInterval(
+      () => setTrafficBucket(Math.floor(Date.now() / TRAFFIC_BUCKET_MS)),
+      TRAFFIC_BUCKET_MS,
+    );
+    return () => clearInterval(id);
+  }, [useTraffic]);
+
+  // Manual refresh (nonce) forces a fresh key -> cache miss -> traffic re-fetch,
+  // and because the nonce lives in the store, the timeline and map chips refresh together.
+  const cacheKey = signature
+    ? (useTraffic ? `${signature}|t${trafficBucket}|r${trafficRefreshNonce}` : signature)
+    : '';
+
   // Haversine estimate first; swapped for Directions data when it resolves.
-  // State is keyed by signature so a stale result never renders against a
-  // newer stop order.
+  // Stored legs are tagged with the route-shape `signature` (not the full
+  // cacheKey). A traffic refresh (bucket/nonce change) keeps the last real legs
+  // visible while the new ones load — stale-while-revalidate — so the display
+  // never flashes back to the haversine estimate and then "reverts".
   const [directions, setDirections] = useState(null);
+  const [trafficLoading, setTrafficLoading] = useState(false);
 
   useEffect(() => {
-    const cached = legCache.get(signature);
-    setDirections(cached ? { sig: signature, legs: cached } : null);
-    if (!signature || coords.length < 2 || cached) return undefined;
+    const cached = legCache.get(cacheKey);
+    if (cached) {
+      setDirections({ sig: signature, legs: cached });
+      setTrafficLoading(false);
+      return undefined;
+    }
+    if (!cacheKey || coords.length < 2) {
+      setDirections(null);
+      setTrafficLoading(false);
+      return undefined;
+    }
+
+    // Same route shape → keep prior legs during the refetch (no flash); a
+    // different shape invalidates the leg count, so fall back to the estimate.
+    setDirections((prev) => (prev && prev.sig === signature ? prev : null));
+    setTrafficLoading(true);
 
     let cancelled = false;
     const timer = setTimeout(() => {
-      getLegSeconds(signature, coords).then((legs) => {
-        if (!cancelled && legs) setDirections({ sig: signature, legs });
+      const departureTime = useTraffic ? new Date() : null;
+      getLegSeconds(cacheKey, coords, departureTime).then((legs) => {
+        if (cancelled) return;
+        if (legs) setDirections({ sig: signature, legs });
+        setTrafficLoading(false);
       });
     }, 300); // debounce rapid reorder/add/remove bursts
 
     return () => { cancelled = true; clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature]);
+  }, [cacheKey]);
 
   const directionsLegs = directions?.sig === signature ? directions.legs : null;
+  const trafficAware = useTraffic && directionsLegs != null;
 
   return useMemo(() => {
     if (!route || stops.length === 0) {
-      return { nodes: [], legs: [], mode: 'relative', isEstimate: false, totalSec: 0 };
+      return {
+        nodes: [], legs: [], mode: 'relative', isEstimate: false, totalSec: 0,
+        nextStop: null, nextStopNode: null, nextStopEta: null,
+        lastCompletedAt: null, timeZone: ROUTE_TIME_ZONE, trafficAware: false,
+        useTraffic, refreshTraffic, trafficLoading,
+      };
     }
 
     const legsSec = directionsLegs ?? estimateAllLegSeconds(coords);
@@ -142,14 +250,16 @@ export default function useRouteTimeline(route) {
     const startMs = anchorStartMs(stops, stopOffsets);
     const mode = startMs != null ? 'clock' : 'relative';
 
-    const timeLabelFor = (offsetSec, stop) => {
+    const timeLabelFor = (offsetSec, stop, kind) => {
       if (mode === 'clock') {
-        // Completed stops show their real completion time, not the projection.
+        // Completed stops show their real completion time (actual), not the projection.
         if (stop && isCompletedStatus(stop.Status__c) && stop.LastModifiedDate) {
           const ms = Date.parse(stop.LastModifiedDate);
           if (!Number.isNaN(ms)) return formatClock(ms);
         }
-        return formatClock(startMs + offsetSec * 1000);
+        // Not-yet-serviced stops are projections → mark as estimates; depots stay unprefixed.
+        const clock = formatClock(startMs + offsetSec * 1000);
+        return kind === 'stop' ? `est. ${clock}` : clock;
       }
       return formatOffset(offsetSec);
     };
@@ -164,7 +274,7 @@ export default function useRouteTimeline(route) {
         name: startSL.Name || 'Start',
         coord: coords[ci],
         offsetSec: offsets[ci],
-        timeLabel: timeLabelFor(offsets[ci], null),
+        timeLabel: timeLabelFor(offsets[ci], null, 'start'),
         legFromPrevSec: null,
         legFromPrevLabel: null,
       });
@@ -182,7 +292,7 @@ export default function useRouteTimeline(route) {
         status: getStopStatus(stop, stops),
         coord: coords[ci],
         offsetSec: offsets[ci],
-        timeLabel: timeLabelFor(offsets[ci], stop),
+        timeLabel: timeLabelFor(offsets[ci], stop, 'stop'),
         legFromPrevSec: legSec,
         legFromPrevLabel: legSec != null ? formatLegDuration(legSec) : null,
       });
@@ -197,7 +307,7 @@ export default function useRouteTimeline(route) {
         name: endSL.Name || 'End',
         coord: coords[ci],
         offsetSec: offsets[ci],
-        timeLabel: timeLabelFor(offsets[ci], null),
+        timeLabel: timeLabelFor(offsets[ci], null, 'end'),
         legFromPrevSec: legSec,
         legFromPrevLabel: formatLegDuration(legSec),
       });
@@ -208,6 +318,29 @@ export default function useRouteTimeline(route) {
       if (n.kind === 'stop' && isCompletedStatus(n.stop?.Status__c)) progressIndex = i;
     });
 
+    // Driver's next stop + actual/estimated clock times (in the operational timezone).
+    const nextStop = getNextPendingStop(stops);
+    const nextStopNode = nextStop
+      ? nodes.find((n) => n.kind === 'stop' && n.stop?.Id === nextStop.Id) ?? null
+      : null;
+
+    const lastCompleted = getLastCompletedStop(stops);
+    const lastCompletedAt = lastCompleted?.LastModifiedDate
+      ? formatStopTimeLabel({ ms: Date.parse(lastCompleted.LastModifiedDate), isActual: true })
+      : null;
+
+    let nextStopEta = null;
+    if (nextStopNode) {
+      if (mode === 'clock') {
+        let etaMs = startMs + nextStopNode.offsetSec * 1000;
+        // Behind schedule: re-estimate from now plus the drive leg into the next stop.
+        if (etaMs < Date.now()) etaMs = Date.now() + (nextStopNode.legFromPrevSec ?? 0) * 1000;
+        nextStopEta = formatStopTimeLabel({ ms: etaMs, isActual: false });
+      } else {
+        nextStopEta = formatOffset(nextStopNode.offsetSec);
+      }
+    }
+
     return {
       nodes,
       mode,
@@ -215,6 +348,15 @@ export default function useRouteTimeline(route) {
       totalSec: offsets[offsets.length - 1] ?? 0,
       serviceTimeMin: SERVICE_TIME_MIN,
       progressIndex,
+      nextStop,
+      nextStopNode,
+      nextStopEta,
+      lastCompletedAt,
+      timeZone: ROUTE_TIME_ZONE,
+      trafficAware,
+      useTraffic,
+      refreshTraffic,
+      trafficLoading,
     };
-  }, [route, stops, startSL, endSL, coords, directionsLegs]);
+  }, [route, stops, startSL, endSL, coords, directionsLegs, trafficAware, useTraffic, refreshTraffic, trafficLoading]);
 }

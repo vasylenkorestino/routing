@@ -5,6 +5,7 @@ import Spinner from '../ui/Spinner';
 import LastServices from '../shared/LastServices';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
+import { computeRouteDurations, fmtDuration } from '../../utils/routeDuration';
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
@@ -29,10 +30,12 @@ function routeMetrics(route) {
     : (!Number.isNaN(distNum) ? `${distNum.toFixed(1)} mi` : '—');
   const gallons = stops.reduce((sum, p) => sum + (parseFloat(p.Gallons_Collected__c) || 0), 0);
   const done = stops.filter((s) => s.Status__c === 'Completed' || s.Status__c === 'Complete').length;
+  const { driveTimeLabel, totalDurationMin } = computeRouteDurations(route);
   return {
     stops: stops.length,
     distance,
-    time: route?.Total_Time__c || '—',
+    driveTime: driveTimeLabel || '—',
+    totalTime: fmtDuration(totalDurationMin),
     gallons: gallons ? gallons.toFixed(1) : '—',
     completion: stops.length ? `${done}/${stops.length}` : '—',
     date: route?.Service_Date__c || '—',
@@ -244,7 +247,8 @@ export default function RouteComparePanel() {
                         <th className="text-left font-semibold px-3 py-1.5">Route</th>
                         <th className="text-right font-semibold px-2 py-1.5">Stops</th>
                         <th className="text-right font-semibold px-2 py-1.5">Distance</th>
-                        <th className="text-right font-semibold px-2 py-1.5">Time</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Drive</th>
+                        <th className="text-right font-semibold px-2 py-1.5">Total</th>
                         <th className="text-right font-semibold px-2 py-1.5">Gallons</th>
                         <th className="text-right font-semibold px-2 py-1.5">Done</th>
                         <th className="text-right font-semibold px-2 py-1.5">Date</th>
@@ -264,7 +268,8 @@ export default function RouteComparePanel() {
                             </td>
                             <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.stops}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.distance}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.time}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.driveTime}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.totalTime}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.gallons}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums text-txt">{m.completion}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums text-txt-secondary">{m.date}</td>

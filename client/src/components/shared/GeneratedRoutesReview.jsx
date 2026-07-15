@@ -4,14 +4,7 @@ import RoutePreviewMap from './RoutePreviewMap';
 import RoutesOverviewMap, { routeColor } from './RoutesOverviewMap';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
-
-/** Formats minutes as "Xh Ym" (or "Ym"). */
-function fmtDuration(min) {
-  if (min == null) return '—';
-  const h = Math.floor(min / 60);
-  const m = Math.round(min % 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
+import { fmtDuration } from '../../utils/routeDuration';
 
 /** Triggers a client-side file download. */
 function download(filename, content, type) {
