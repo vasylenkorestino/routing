@@ -148,6 +148,10 @@ const routingSlice = (set, get) => ({
         if (id !== routeId) hidden[id] = true;
       });
       set({ hiddenRouteIds: hidden });
+    } else {
+      // "All Routes" — reveal every route on the map instead of leaving the
+      // previously selected route's visibility lingering.
+      set({ hiddenRouteIds: {} });
     }
   },
 
@@ -163,7 +167,7 @@ const routingSlice = (set, get) => ({
    */
   refreshRoutes: async (options = {}) => {
     const { selectNewRoute = false, expectedNewIds = null } = options;
-    const { serviceDate, recordType, serviceLocation, routeId, routes: oldRoutes } = get();
+    const { serviceDate, recordType, serviceLocation, routes: oldRoutes } = get();
     set({ isLoading: true });
     try {
       const params = {
@@ -180,10 +184,16 @@ const routingSlice = (set, get) => ({
       });
       get().setLayerData('routes', routes);
 
+      // Re-read the selection AFTER the async fetch so a route the user picked
+      // while this refresh was in flight is never clobbered by a stale snapshot.
+      const routeId = get().routeId;
+
       if (routeId) {
         const updated = routes.find((r) => (r.Id ?? r.id) === routeId) ?? null;
         if (updated) {
-          set({ routeId, route: updated });
+          // Refresh only the route object (fresh stops/polyline); keep routeId so
+          // the header dropdown and map centering stay on the current selection.
+          set({ route: updated });
           return;
         }
       }
@@ -195,15 +205,15 @@ const routingSlice = (set, get) => ({
           ? routes.find((r) => expectedNewIds.includes(r.Id ?? r.id))
           : routes.find((r) => !oldIds.has(r.Id ?? r.id));
         if (newRoute) {
-          set({ routeId: newRoute.Id ?? newRoute.id, route: newRoute });
+          get().selectRoute(newRoute.Id ?? newRoute.id);
           return;
         }
       }
 
       if (routes.length > 0 && !routeId) {
-        set({ routeId: routes[0].Id ?? routes[0].id, route: routes[0] });
+        get().selectRoute(routes[0].Id ?? routes[0].id);
       } else if (routeId && !routes.some((r) => (r.Id ?? r.id) === routeId)) {
-        set({ routeId: null, route: null });
+        get().selectRoute(null);
       }
     } catch (err) {
       toast.error(getErrorMessage(err));
