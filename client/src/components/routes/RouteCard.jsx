@@ -138,23 +138,23 @@ export default function RouteCard({ route }) {
         </span>
       </div>
 
-      {/* Metrics */}
-      <div className="flex flex-wrap items-center gap-1.5 ml-10">
+      {/* Metrics — single scrollable row so ETA chips never wrap to a new line */}
+      <div className="flex flex-nowrap items-center gap-1.5 ml-10 overflow-x-auto">
         {metrics.filter((m) => m.label !== 'Date').map((m) => (
-          <div key={m.label} className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5">
+          <div key={m.label} className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5 shrink-0">
             <span className="text-[10px] uppercase tracking-wider text-txt-secondary font-medium">{m.label}</span>
             <span className="text-xs font-bold text-txt tabular-nums">{m.value}</span>
           </div>
         ))}
         {/* Live ETA — only while the route is still in progress. */}
         {!routeCompleted && lastCompletedAt && (
-          <div className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5">
+          <div className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5 shrink-0">
             <span className="text-[10px] uppercase tracking-wider text-txt-secondary font-medium">Last Completed</span>
             <span className="text-xs font-bold text-success tabular-nums">{lastCompletedAt}</span>
           </div>
         )}
         {!routeCompleted && nextStopEta && (
-          <div className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5">
+          <div className="flex items-center gap-1.5 bg-bg rounded-lg px-2.5 py-1.5 shrink-0">
             <span className="text-[10px] uppercase tracking-wider text-txt-secondary font-medium">Next Stop ETA</span>
             <span className="text-xs font-bold text-primary tabular-nums">{nextStopEta}</span>
           </div>
