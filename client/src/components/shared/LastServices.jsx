@@ -1,33 +1,10 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { getLastServices } from '../../api/routing';
+import { useState, useCallback } from 'react';
+import useLastServices from '../../hooks/useLastServices';
 
 /** Collapsible drawer showing account service history + account info */
 export default function LastServices({ accountId, accountName }) {
   const [open, setOpen] = useState(true);
-  const [services, setServices] = useState(null);
-  const [account, setAccount] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const prevIdRef = useRef(null);
-
-  const fetchData = useCallback(async (id) => {
-    setLoading(true);
-    try {
-      const res = await getLastServices(id);
-      setServices(res.services ?? []);
-      setAccount(res.account ?? null);
-    } catch { setServices([]); setAccount(null); }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    if (accountId && accountId !== prevIdRef.current) {
-      prevIdRef.current = accountId;
-      setServices(null);
-      setAccount(null);
-      setOpen(true);
-      fetchData(accountId);
-    }
-  }, [accountId, fetchData]);
+  const { services, account, loading } = useLastServices(accountId);
 
   const toggle = useCallback(() => {
     setOpen((v) => !v);

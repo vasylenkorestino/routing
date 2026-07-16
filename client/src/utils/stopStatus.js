@@ -2,18 +2,14 @@
  * Stop status classification for map markers.
  *
  * Precedence (first match wins):
- *   1. completed      — stop already serviced on this route
- *   2. needsAttention — still New/Skipped although a later stop was completed (passed over)
- *   3. overdue        — next expected service (last service + pickup frequency) is in the past
- *   4. scheduled      — everything else (not visited yet)
+ *   1. completed   — stop already serviced on this route
+ *   2. inProgress  — everything else (not visited yet)
  */
 
 /** Ordered for legend display; precedence is handled in getStopStatus. */
 export const STOP_STATUSES = {
-  scheduled: { key: 'scheduled', label: 'Scheduled', color: '#2563eb' },
+  inProgress: { key: 'inProgress', label: 'In Progress', color: '#2563eb' },
   completed: { key: 'completed', label: 'Completed', color: '#22c55e' },
-  needsAttention: { key: 'needsAttention', label: 'Needs Attention', color: '#f59e0b' },
-  overdue: { key: 'overdue', label: 'Overdue', color: '#ef4444' },
 };
 
 /** Same completed values as the data table badge (RouteDataTable / StopRow). */
@@ -70,21 +66,9 @@ export function isStopOverdue(stop, today = new Date()) {
 }
 
 /**
- * Classifies one stop given all stops of its route (sorted by Priority__c).
- * Returns one of the STOP_STATUSES entries.
+ * Classifies one stop. Returns completed or inProgress for map/legend colors.
  */
-export function getStopStatus(stop, allStops = []) {
+export function getStopStatus(stop) {
   if (isCompletedStatus(stop?.Status__c)) return STOP_STATUSES.completed;
-
-  const pending = !stop?.Status__c || stop.Status__c === 'New' || stop.Status__c === 'Skipped';
-  if (pending) {
-    const priority = stop?.Priority__c ?? Infinity;
-    const passedOver = allStops.some(
-      (s) => s !== stop && (s.Priority__c ?? Infinity) > priority && isCompletedStatus(s.Status__c),
-    );
-    if (passedOver) return STOP_STATUSES.needsAttention;
-    if (isStopOverdue(stop)) return STOP_STATUSES.overdue;
-  }
-
-  return STOP_STATUSES.scheduled;
+  return STOP_STATUSES.inProgress;
 }

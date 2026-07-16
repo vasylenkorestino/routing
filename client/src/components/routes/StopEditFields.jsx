@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
-import { getLastServices } from '../../api/routing';
 import { SERVICE_TYPES, SUB_TYPES } from '../../utils/serviceTypes';
+import useLastServices from '../../hooks/useLastServices';
 
 /**
  * Controlled editor for a single stop's service fields (Service Type, Sub Type,
@@ -12,20 +11,8 @@ import { SERVICE_TYPES, SUB_TYPES } from '../../utils/serviceTypes';
  * @param layout   'row' (wide, side-by-side) or 'stack' (narrow panels).
  */
 export default function StopEditFields({ values, onChange, accountId, accountName, layout = 'row' }) {
-  const [services, setServices] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const { services, loading } = useLastServices(accountId);
   const serviceType = values.ServiceType__c || 'UCO Collection';
-
-  useEffect(() => {
-    if (!accountId) return;
-    let cancelled = false;
-    setLoading(true);
-    getLastServices(accountId)
-      .then((res) => { if (!cancelled) setServices(res.services ?? res ?? []); })
-      .catch(() => { if (!cancelled) setServices([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [accountId]);
 
   const stacked = layout === 'stack';
 

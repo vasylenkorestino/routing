@@ -12,10 +12,10 @@ import { getErrorMessage } from '../../utils/error';
 
 const TABS = ['routes', 'tickets', 'shapes'];
 
-/** Bounding-box padding around route stops (~10 miles), matching AI enhance. */
-const ROUTE_BBOX_PAD = 0.15;
+/** Bounding-box padding around route stops (~20 miles). */
+const ROUTE_BBOX_PAD = 0.3;
 /** Below this zoom the viewport is too large for progressive ticket fetches. */
-const MIN_TICKET_FETCH_ZOOM = 10;
+const MIN_TICKET_FETCH_ZOOM = 7;
 /** Server-side cap per ticket fetch. */
 const TICKET_FETCH_LIMIT = 300;
 

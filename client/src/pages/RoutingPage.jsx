@@ -20,7 +20,6 @@ import TankSensorData from '../components/shared/TankSensorData';
 import AIChat from '../components/shared/AIChat';
 import AIReviewPanel from '../components/shared/AIReviewPanel';
 import AIGenerateModal from '../components/shared/AIGenerateModal';
-import AIEnhanceModal from '../components/routes/AIEnhanceModal';
 import GenerationProgressPanel from '../components/shared/GenerationProgressPanel';
 import GeneratedRoutesReview from '../components/shared/GeneratedRoutesReview';
 import PlanRoutesModal from '../components/shared/PlanRoutesModal';
@@ -229,7 +228,6 @@ export default function RoutingPage() {
   const isEditPoint = useStore((s) => s.isEditPoint);
   const isReviewOpen = useStore((s) => s.isReviewOpen);
   const isAIGenerate = useStore((s) => s.isAIGenerate);
-  const isAIEnhance = useStore((s) => s.isAIEnhance);
   const isPlanRoutes = useStore((s) => s.isPlanRoutes);
   const genReviewOpen = useStore((s) => s.genReviewOpen);
   const planningOpen = useStore((s) => s.planningOpen);
@@ -278,7 +276,6 @@ export default function RoutingPage() {
       {isEditPoint && <PointEditor />}
       {isReviewOpen && <AIReviewPanel />}
       {isAIGenerate && <AIGenerateModal onClose={() => useStore.getState().closeModal('isAIGenerate')} />}
-      {isAIEnhance && <AIEnhanceModal />}
       {genReviewOpen && <GeneratedRoutesReview />}
       {isPlanRoutes && <PlanRoutesModal onClose={() => useStore.getState().closeModal('isPlanRoutes')} />}
       {planningOpen && <RoutePlanningWorkspace />}

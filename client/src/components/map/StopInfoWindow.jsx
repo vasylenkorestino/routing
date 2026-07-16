@@ -56,19 +56,31 @@ export default function StopInfoWindow({ stop, onClose }) {
     }
   }, [stop, currentRouteId, currentRouteName, refreshRoutes, onClose]);
 
+  const lastServicesCache = useStore((s) => s.lastServicesByAccountId);
+  const cacheLastServices = useStore((s) => s.cacheLastServices);
+
   const handleLastServices = useCallback(async () => {
     if (showServices) { setShowServices(false); return; }
     setShowServices(true);
     setShowTankSensor(false);
-    if (!services) {
-      setLoadingServices(true);
-      try {
-        const res = await routingApi.getLastServices(stop.AccountId__c);
-        setServices(res.services ?? res ?? []);
-      } catch { setServices([]); }
-      setLoadingServices(false);
+    if (services) return;
+
+    const accountId = stop.AccountId__c;
+    const cached = accountId ? lastServicesCache?.[accountId] : null;
+    if (cached) {
+      setServices(cached.services ?? []);
+      return;
     }
-  }, [showServices, services, stop.AccountId__c]);
+
+    setLoadingServices(true);
+    try {
+      const res = await routingApi.getLastServices(accountId);
+      const list = res.services ?? res ?? [];
+      cacheLastServices(accountId, { services: list, account: res.account ?? null });
+      setServices(list);
+    } catch { setServices([]); }
+    setLoadingServices(false);
+  }, [showServices, services, stop.AccountId__c, lastServicesCache, cacheLastServices]);
 
   const handleTankSensor = useCallback(async () => {
     if (showTankSensor) { setShowTankSensor(false); return; }

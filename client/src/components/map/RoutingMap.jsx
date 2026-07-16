@@ -5,6 +5,7 @@ import { decodeRoutePolyline, isValidCoord } from '../../utils/routePolyline';
 import RouteLayer, { CompareRouteLayer } from './RouteLayer';
 import RouteTimelineMapLayer from './RouteTimelineMapLayer';
 import TicketLayer from './TicketLayer';
+import RouteLogLayer from './RouteLogLayer';
 import ShapeLayer from './ShapeLayer';
 import MapOverlayPanel from './MapOverlayPanel';
 import MapLegend from './MapLegend';
@@ -127,6 +128,7 @@ export default function RoutingMap() {
       {layers.routes.visible && !compareMode && <RouteTimelineMapLayer />}
       <CompareRouteLayer />
       {layers.tickets.visible && <TicketLayer tickets={layers.tickets.data} />}
+      {routeId && !compareMode && <RouteLogLayer />}
       {layers.shapes.visible && <ShapeLayer shapes={layers.shapes.data} />}
 
       {/* Service Location markers */}

@@ -10,6 +10,7 @@ const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters')
 const aiJobs = require('../services/aiJobs');
 const { publishJobProgress } = require('../services/aiJobPublisher');
 const { runEnhancePipeline, ANALYZE_STOPS_SYSTEM } = require('../services/enhancePipeline');
+const { saveEnhanceLogs } = require('../services/saveEnhanceLogs');
 const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 
@@ -233,37 +234,13 @@ router.post('/', async (req, res, next) => {
       ...suggestedAdds.map((r) => ({ ...r, action: 'add', _section: 'add' })),
     ];
 
-    const logsToCreate = allRecs.map((rec) => ({
-      Google_Route__c: googleRouteId,
-      Account__c: rec.accountId || null,
-      Type__c: rec.action === 'add' ? 'Account Recommended' : (rec.action === 'keep' ? 'Account Added' : 'Account Recommended'),
-      Reason__c: `[${(rec.action || '').toUpperCase()}] ${rec.accountName || ''}: ${rec.reason || ''}`,
-      Confidence__c: (rec.confidence || 0) / 100,
-      Status__c: 'Proposed',
-      Skill__c: 'AI Enhance',
-    }));
-
-    let createdLogs = [];
-    if (logsToCreate.length > 0) {
-      try {
-        createdLogs = await recorder.wrap(
-          'Create RouteLogs',
-          'Skill',
-          () => conn.sobject('RouteLog__c').create(logsToCreate),
-          { input: { count: logsToCreate.length, sample: logsToCreate.slice(0, 3) } },
-        );
-      } catch (err) {
-        logger.error('AI Enhance: failed to create RouteLog__c', { error: err.message });
-        logErrorToSalesforce({ errorType: 'AIEnhanceLogError', errorMessage: err.message, source: 'enhance-route', requestBody: JSON.stringify(logsToCreate).substring(0, 30000) });
-      }
-    }
-
-    const logIds = Array.isArray(createdLogs) ? createdLogs.map((r) => r.id || r.Id).filter(Boolean) : [];
-    let savedLogs = [];
-    if (logIds.length > 0) {
-      const ids = logIds.map((id) => `'${id}'`).join(',');
-      const logResult = await conn.query(`SELECT Id, Name, Account__c, Type__c, Reason__c, Confidence__c, Status__c FROM RouteLog__c WHERE Id IN (${ids})`);
-      savedLogs = logResult.records;
+    let savedRecs = [];
+    try {
+      savedRecs = await saveEnhanceLogs(conn, googleRouteId, allRecs, recorder);
+    } catch (err) {
+      logger.error('AI Enhance: failed to save RouteLog__c', { error: err.message });
+      logErrorToSalesforce({ errorType: 'AIEnhanceLogError', errorMessage: err.message, source: 'enhance-route', requestBody: JSON.stringify(allRecs).substring(0, 30000) });
+      savedRecs = allRecs;
     }
 
     // Address is no longer sent to the AI (token savings) — re-attach it server-side for the UI.
@@ -280,11 +257,9 @@ router.post('/', async (req, res, next) => {
       }
     }
 
-    const result = allRecs.map((rec, i) => ({
+    const result = savedRecs.map((rec) => ({
       ...rec,
       address: addressMap[rec.accountId] || '',
-      logId: savedLogs[i]?.Id || logIds[i] || null,
-      logName: savedLogs[i]?.Name || null,
     }));
 
     const existing = result.filter((r) => r._section === 'existing');

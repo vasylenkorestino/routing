@@ -15,8 +15,16 @@ export default function RouteCard({ route }) {
   const openCompare = useStore((st) => st.openCompare);
   const selectRoute = useStore((st) => st.selectRoute);
   const refreshRoutes = useStore((st) => st.refreshRoutes);
+  const trackAIJob = useStore((st) => st.trackAIJob);
+  const aiJobStatus = useStore((st) => st.aiJobStatus);
+  const aiJobType = useStore((st) => st.aiJobType);
+  const aiJobMeta = useStore((st) => st.aiJobMeta);
   const drivers = useStore((st) => st.drivers);
   const [optimizing, setOptimizing] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
+  const enhanceRunning = enhancing
+    || (aiJobType === 'enhance' && (aiJobStatus === 'running' || aiJobStatus === 'queued')
+      && aiJobMeta?.googleRouteId === route?.Id);
   // Next-stop ETA + last actual completion (in-progress routes only). Shares the
   // Directions cache with the timeline/map layer for the selected route.
   const { nextStopEta, lastCompletedAt } = useRouteTimeline(route);
@@ -51,6 +59,21 @@ export default function RouteCard({ route }) {
       setOptimizing(false);
     }
   }, [route, refreshRoutes]);
+
+  /** Starts AI Enhance in the background; progress renders in the AI Logs panel. */
+  const handleAIEnhance = useCallback(async () => {
+    if (!route?.Id || enhanceRunning) return;
+    setEnhancing(true);
+    try {
+      const { jobId } = await routingApi.enhanceRouteAsync({ googleRouteId: route.Id });
+      await trackAIJob(jobId, 'enhance', { googleRouteId: route.Id });
+      toast.success('AI Enhance started — progress is in AI Logs.');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setEnhancing(false);
+    }
+  }, [route, enhanceRunning, trackAIJob]);
 
   const metrics = useMemo(() => {
     if (!route) return [];
@@ -178,7 +201,14 @@ export default function RouteCard({ route }) {
         )}
         <ActionBtn onClick={openCompare} icon={ICONS.compare} title="Compare with another route">Compare</ActionBtn>
         {!routeCompleted && (
-          <ActionBtn variant="ai" onClick={() => openModal('isAIEnhance')} icon={<span className="text-[10px] leading-none">✦</span>}>AI Enhance</ActionBtn>
+          <ActionBtn
+            variant="ai"
+            onClick={handleAIEnhance}
+            disabled={enhanceRunning}
+            icon={<span className="text-[10px] leading-none">✦</span>}
+          >
+            {enhanceRunning ? 'Analyzing…' : 'AI Enhance'}
+          </ActionBtn>
         )}
       </div>
 

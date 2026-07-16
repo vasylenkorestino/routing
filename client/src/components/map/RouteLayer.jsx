@@ -143,86 +143,13 @@ function NativePolyline({ path, color, visible }) {
   return null;
 }
 
-/** Stable identity for a stop (id, or its coordinates when unsaved). */
-const stopKey = (s) => s.Id ?? `${s.Latitude__c},${s.Longitude__c}`;
-
-/** Pixel gap between spread-out markers and the radius at which they count as overlapping. */
-const SPIDER_SPACING_PX = 40;
-const OVERLAP_RADIUS_PX = 34;
-
-/**
- * Spreads overlapping markers into a horizontal row so each number stays
- * readable when zoomed out. Markers closer than OVERLAP_RADIUS_PX (in screen
- * pixels at the current zoom) are grouped and laid out around their shared
- * center; as zooming in pulls them apart they naturally return to true spots.
- * Returns Map<stopKey, {lat,lng}> holding only the displaced markers.
- */
-function useSpiderfiedStops(stops) {
-  const map = useGoogleMap();
-  const [zoom, setZoom] = useState(() => map?.getZoom() ?? 0);
-  const [projectionReady, setProjectionReady] = useState(() => !!map?.getProjection());
-
-  useEffect(() => {
-    if (!map) return undefined;
-    setZoom(map.getZoom() ?? 0);
-    setProjectionReady(!!map.getProjection());
-    const z = map.addListener('zoom_changed', () => setZoom(map.getZoom() ?? 0));
-    const p = map.addListener('projection_changed', () => setProjectionReady(!!map.getProjection()));
-    return () => { z.remove(); p.remove(); };
-  }, [map]);
-
-  const stopsSig = stops.map(stopKey).join('|');
-
-  return useMemo(() => {
-    const displaced = new Map();
-    const projection = map?.getProjection();
-    if (!projection || stops.length < 2) return displaced;
-
-    const scale = 2 ** zoom; // world (0–256) → screen pixels
-    const pts = stops.map((s) => {
-      const world = projection.fromLatLngToPoint(
-        new google.maps.LatLng(Number(s.Latitude__c), Number(s.Longitude__c)),
-      );
-      return { s, px: world.x * scale, py: world.y * scale };
-    });
-
-    // Greedy grouping: each ungrouped marker seeds a cluster of everything within radius.
-    const grouped = new Array(pts.length).fill(false);
-    for (let i = 0; i < pts.length; i++) {
-      if (grouped[i]) continue;
-      const group = [i];
-      grouped[i] = true;
-      for (let j = i + 1; j < pts.length; j++) {
-        if (grouped[j]) continue;
-        if (Math.hypot(pts[i].px - pts[j].px, pts[i].py - pts[j].py) < OVERLAP_RADIUS_PX) {
-          group.push(j);
-          grouped[j] = true;
-        }
-      }
-      if (group.length < 2) continue;
-
-      const cx = group.reduce((sum, k) => sum + pts[k].px, 0) / group.length;
-      const cy = group.reduce((sum, k) => sum + pts[k].py, 0) / group.length;
-      const startX = cx - ((group.length - 1) * SPIDER_SPACING_PX) / 2;
-      group.forEach((k, gi) => {
-        const ll = projection.fromPointToLatLng({ x: (startX + gi * SPIDER_SPACING_PX) / scale, y: cy / scale });
-        displaced.set(stopKey(pts[k].s), { lat: ll.lat(), lng: ll.lng() });
-      });
-    }
-    return displaced;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, zoom, projectionReady, stopsSig]);
-}
-
 /**
  * Numbered stop marker with hover-sync: highlights (bigger, ringed, on top)
  * when its list row is hovered/selected, and reports map hover back to the
  * list via hoveredStopId. Never pans or zooms the map.
- * `status` (from getStopStatus) colors the marker; hovering on the map shows
- * a compact StopTooltip with the key details. `position` may be a spread-out
- * spot (see useSpiderfiedStops) that differs from the stop's true coordinates.
+ * `status` (from getStopStatus) colors the marker; position stays at true coords.
  */
-function StopMarker({ pt, index, color, status, onClick, position }) {
+function StopMarker({ pt, index, color, status, onClick }) {
   const highlighted = useStore((s) => s.hoveredStopId === pt.Id || s.selectedStopId === pt.Id);
   const hoveredFromMap = useStore((s) => s.hoveredStopId === pt.Id && s.hoveredStopSource === 'map');
   const setHoveredStopId = useStore((s) => s.setHoveredStopId);
@@ -230,7 +157,7 @@ function StopMarker({ pt, index, color, status, onClick, position }) {
   return (
     <>
       <Marker
-        position={position ?? { lat: Number(pt.Latitude__c), lng: Number(pt.Longitude__c) }}
+        position={{ lat: Number(pt.Latitude__c), lng: Number(pt.Longitude__c) }}
         label={{
           text: String(index + 1),
           color: '#fff',
@@ -276,10 +203,7 @@ function SingleRoute({ route, onSelectStop, forceVisible = false, useStatusColor
 
   const { startPath, endPath, fullPath } = useDrivingPaths(id, startPt, endPt, stops, hasPolyline);
 
-  // Spread overlapping numbered markers into a row when zoomed out; snap back on zoom-in.
-  const displacedStops = useSpiderfiedStops(stops);
-
-  // Status per stop (Completed / Needs Attention / Overdue / Scheduled) for marker colors.
+  // Status per stop (Completed / In Progress) for marker colors.
   const stopStatuses = useMemo(
     () => (useStatusColors ? stops.map((pt) => getStopStatus(pt, stops)) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -313,7 +237,6 @@ function SingleRoute({ route, onSelectStop, forceVisible = false, useStatusColor
           index={pIdx}
           color={color}
           status={useStatusColors ? stopStatuses[pIdx] : null}
-          position={displacedStops.get(stopKey(pt))}
           onClick={() => onSelectStop({ ...pt, _routeName: route.Name, _color: color, _googleRouteId: route.Id ?? route.id })}
         />
       ))}

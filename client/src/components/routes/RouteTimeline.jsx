@@ -43,7 +43,7 @@ function Connector({ label, reached }) {
  * map markers via hoveredStopId / selectedStopId. Collapsible.
  */
 export default function RouteTimeline({ route }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const hoveredStopId = useStore((s) => s.hoveredStopId);
   const selectedStopId = useStore((s) => s.selectedStopId);
   const setHoveredStopId = useStore((s) => s.setHoveredStopId);

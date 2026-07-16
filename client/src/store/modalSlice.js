@@ -1,4 +1,4 @@
-const MODAL_KEYS = ['isNew', 'isEdit', 'isCombine', 'isSplit', 'isEditPoint', 'isComplete', 'isAIGenerate', 'isAIEnhance', 'isPlanRoutes'];
+const MODAL_KEYS = ['isNew', 'isEdit', 'isCombine', 'isSplit', 'isEditPoint', 'isComplete', 'isAIGenerate', 'isPlanRoutes'];
 
 /** Modal slice — toggles for route-action modals */
 const modalSlice = (set) => ({
@@ -9,7 +9,6 @@ const modalSlice = (set) => ({
   isEditPoint: false,
   isComplete: false,
   isAIGenerate: false,
-  isAIEnhance: false,
   isPlanRoutes: false,
   editPoint: null,
 

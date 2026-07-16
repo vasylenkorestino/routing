@@ -6,49 +6,14 @@ import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 import LastServices from '../shared/LastServices';
 import TankSensorData from '../shared/TankSensorData';
-
-/* ── Flag presentation + decision semantics ──────────────────────────── */
-
-const FLAG_META = {
-  ADD: { label: 'Add', badge: 'bg-ai/10 text-ai border-ai/30', dot: 'bg-ai' },
-  KEEP: { label: 'Keep', badge: 'bg-success/10 text-success border-success/30', dot: 'bg-success' },
-  REMOVE: { label: 'Remove', badge: 'bg-error/10 text-error border-error/30', dot: 'bg-error' },
-  FLAG: { label: 'Flag', badge: 'bg-warning/10 text-warning border-warning/30', dot: 'bg-warning' },
-  OVERFLOW: { label: 'Overflow Risk', badge: 'bg-orange-100 text-orange-600 border-orange-300', dot: 'bg-orange-500' },
-};
-
-const OUTCOME_LABEL = { add: 'Add stop', keep: 'Keep stop', remove: 'Remove stop', ignore: 'No change' };
-
-// Flags that require an explicit manager decision rather than a simple approve/decline.
-const NEEDS_RESOLUTION = new Set(['FLAG', 'OVERFLOW']);
-
-/** Resolves a flag + approve/decline decision into a concrete route outcome. */
-function decide(flag, decision) {
-  switch (flag) {
-    case 'REMOVE': return decision === 'approve' ? 'remove' : 'keep';
-    case 'KEEP': return decision === 'approve' ? 'keep' : 'remove';
-    case 'ADD': return decision === 'approve' ? 'add' : 'ignore';
-    default: return null; // FLAG / OVERFLOW → manager picks the outcome directly
-  }
-}
-
-/** Splits a "[ACTION] text" reason into its flag token and message. */
-function parseReason(reason) {
-  if (!reason) return { flag: 'FLAG', text: '' };
-  const m = reason.match(/^\[(\w+)\]\s*(.*)$/s);
-  if (!m) return { flag: 'FLAG', text: reason };
-  const token = m[1].toUpperCase();
-  const flag = FLAG_META[token] ? token : 'FLAG';
-  return { flag, text: m[2] };
-}
-
-const fmtDate = (d) => {
-  if (!d) return '';
-  try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
-  catch { return d; }
-};
-
-/* ── Modal ───────────────────────────────────────────────────────────── */
+import AIProgressSteps from '../shared/AIProgressSteps';
+import {
+  FLAG_META,
+  OUTCOME_LABEL,
+  NEEDS_RESOLUTION,
+  decide,
+  parseReason,
+} from '../../utils/routeLogFlags';
 
 const FILTERS = [
   { key: 'ALL', label: 'All' },
@@ -59,23 +24,49 @@ const FILTERS = [
   { key: 'OVERFLOW', label: 'Overflow' },
 ];
 
+const fmtDate = (d) => {
+  if (!d) return '';
+  try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  catch { return d; }
+};
+
 /**
  * Reviews RouteLog__c entries for a route with bulk decisions. Renders either
  * inline on the page (variant="embedded", the default) or as a focused modal
- * (variant="modal"). The same instance is reused across variants so popping in
- * and out preserves loaded logs, filters, and selection.
+ * (variant="modal"). Shows live AI Enhance progress when a job is running.
  */
 export default function AILogsModal({ googleRouteId, routeName, variant = 'embedded', onTogglePop }) {
-  const refreshRoutes = useStore((s) => s.refreshRoutes);
-  const driverName = useStore((s) => s.driver?.name) || 'You';
+  const resolveRouteLogs = useStore((s) => s.resolveRouteLogs);
+  const fetchRouteLogs = useStore((s) => s.fetchRouteLogs);
+  const logs = useStore((s) => s.routeLogs);
+  const loading = useStore((s) => s.routeLogsLoading);
+  const approving = useStore((s) => s.routeLogsApproving);
+  const summary = useStore((s) => s.routeLogsSummary);
+  const setRouteLogsSummary = useStore((s) => s.setRouteLogsSummary);
+  const clearRouteLogsSummary = useStore((s) => s.clearRouteLogsSummary);
+
   const setMapCenter = useStore((s) => s.setMapCenter);
   const setMapZoom = useStore((s) => s.setMapZoom);
   const route = useStore((s) => s.route);
 
-  const isModal = variant === 'modal';
+  const aiJobType = useStore((s) => s.aiJobType);
+  const aiJobStatus = useStore((s) => s.aiJobStatus);
+  const aiJobMeta = useStore((s) => s.aiJobMeta);
+  const aiJobSteps = useStore((s) => s.aiJobSteps);
+  const aiJobFindings = useStore((s) => s.aiJobFindings);
+  const aiJobProgress = useStore((s) => s.aiJobProgress);
+  const aiJobResult = useStore((s) => s.aiJobResult);
+  const aiJobError = useStore((s) => s.aiJobError);
+  const aiJobPartialResults = useStore((s) => s.aiJobPartialResults);
+  const clearAIJob = useStore((s) => s.clearAIJob);
+  const refreshAIJob = useStore((s) => s.refreshAIJob);
+  const aiJobId = useStore((s) => s.aiJobId);
 
-  // Accounts already present as stops on the current route — used to constrain
-  // FLAG/OVERFLOW resolution options (can't add an existing stop; can't keep/remove a missing one).
+  const isModal = variant === 'modal';
+  const jobForRoute = aiJobType === 'enhance' && aiJobMeta?.googleRouteId === googleRouteId;
+  const analyzing = jobForRoute && (aiJobStatus === 'running' || aiJobStatus === 'queued');
+  const stopsReady = !!(analyzing && (aiJobPartialResults?.stopsSaved || aiJobPartialResults?.stage === 'stops_ready'));
+
   const routeAccountIds = useMemo(() => {
     const stops = route?.Routes__r?.records ?? route?.Routes__r ?? route?.points ?? [];
     const ids = new Set();
@@ -86,9 +77,6 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     return ids;
   }, [route]);
 
-  const [logs, setLogs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [approving, setApproving] = useState({});
   const [filter, setFilter] = useState('ALL');
   const [sortKey, setSortKey] = useState('flag');
   const [selected, setSelected] = useState(() => new Set());
@@ -96,20 +84,56 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
   const [detailLog, setDetailLog] = useState(null);
   const [detailTab, setDetailTab] = useState('services');
   const [collapsed, setCollapsed] = useState(true);
+  const handledCompleteRef = useRef(null);
+  const handledStopsReadyRef = useRef(null);
 
-  const fetchLogs = useCallback(async () => {
-    if (!googleRouteId) return;
-    setLoading(true);
-    try {
-      const data = await routingApi.getRouteLogs(googleRouteId);
-      setLogs(Array.isArray(data) ? data : []);
-    } catch { setLogs([]); }
-    finally { setLoading(false); }
-  }, [googleRouteId]);
+  useEffect(() => {
+    fetchRouteLogs(googleRouteId);
+    clearRouteLogsSummary();
+    setSelected(new Set());
+    setDetailLog(null);
+    handledStopsReadyRef.current = null;
+  }, [googleRouteId, fetchRouteLogs, clearRouteLogsSummary]);
 
-  useEffect(() => { fetchLogs(); }, [fetchLogs]);
+  // Auto-expand while AI Enhance is analyzing this route.
+  useEffect(() => {
+    if (analyzing) setCollapsed(false);
+  }, [analyzing]);
 
-  // Decorate logs with parsed flag/text once.
+  // Stage 1 ready: load stop RouteLogs + summary while adds still run in the background.
+  useEffect(() => {
+    if (!jobForRoute || !aiJobId || !stopsReady) return;
+    if (handledStopsReadyRef.current === aiJobId) return;
+    handledStopsReadyRef.current = aiJobId;
+    if (aiJobPartialResults?.summary) setRouteLogsSummary(aiJobPartialResults.summary);
+    fetchRouteLogs(googleRouteId);
+  }, [
+    jobForRoute, aiJobId, stopsReady, aiJobPartialResults?.summary,
+    googleRouteId, fetchRouteLogs, setRouteLogsSummary,
+  ]);
+
+  // On job complete: show summary, refresh logs, clear job tracking.
+  useEffect(() => {
+    if (!jobForRoute || !aiJobId) return;
+    if (aiJobStatus === 'complete' && aiJobResult) {
+      if (handledCompleteRef.current === aiJobId) return;
+      handledCompleteRef.current = aiJobId;
+      setRouteLogsSummary(aiJobResult.summary || '');
+      fetchRouteLogs(googleRouteId);
+      clearAIJob();
+      setCollapsed(false);
+      toast.success('AI Enhance complete');
+    } else if (aiJobStatus === 'error') {
+      if (handledCompleteRef.current === `err:${aiJobId}`) return;
+      handledCompleteRef.current = `err:${aiJobId}`;
+      toast.error(aiJobError || 'Analysis failed');
+      clearAIJob();
+    }
+  }, [
+    jobForRoute, aiJobId, aiJobStatus, aiJobResult, aiJobError,
+    googleRouteId, fetchRouteLogs, setRouteLogsSummary, clearAIJob,
+  ]);
+
   const decorated = useMemo(() => logs.map((l) => ({ ...l, ...parseReason(l.Reason__c) })), [logs]);
 
   const counts = useMemo(() => {
@@ -124,7 +148,7 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     list = [...list].sort((a, b) => {
       if (sortKey === 'flag') return flagOrder.indexOf(a.flag) - flagOrder.indexOf(b.flag);
       if (sortKey === 'confidence') return (b.Confidence__c || 0) - (a.Confidence__c || 0);
-      return new Date(b.CreatedDate) - new Date(a.CreatedDate); // newest
+      return new Date(b.CreatedDate) - new Date(a.CreatedDate);
     });
     return list;
   }, [decorated, filter, sortKey]);
@@ -153,47 +177,39 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     }
   }, [setMapCenter, setMapZoom]);
 
-  /** Applies a batch of { logId, outcome } resolutions and reflects them locally. */
   const applyResolutions = useCallback(async (items) => {
     if (!items.length) return;
-    const ids = items.map((i) => i.logId);
-    setApproving((p) => { const n = { ...p }; ids.forEach((id) => { n[id] = true; }); return n; });
     try {
-      const res = await routingApi.approveRouteLogs({ resolutions: items });
-      const now = new Date().toISOString();
-      const byId = Object.fromEntries(items.map((i) => [i.logId, i.outcome]));
-      setLogs((prev) => prev.map((l) => {
-        const outcome = byId[l.Id];
-        if (!outcome) return l;
-        const st = outcome === 'add' || outcome === 'keep' ? 'Accepted' : 'Declined';
-        return { ...l, Status__c: st, Accepted_By__c: driverName, Accepted_Date__c: now, _outcome: outcome };
-      }));
-      setSelected((prev) => { const n = new Set(prev); ids.forEach((id) => n.delete(id)); return n; });
-      if (res?.added?.length || res?.removed?.length) refreshRoutes?.();
+      await resolveRouteLogs(items);
+      setSelected((prev) => {
+        const n = new Set(prev);
+        items.forEach((i) => n.delete(i.logId));
+        return n;
+      });
     } catch (err) {
       toast.error(getErrorMessage(err));
-    } finally {
-      setApproving((p) => { const n = { ...p }; ids.forEach((id) => { n[id] = false; }); return n; });
     }
-  }, [driverName, refreshRoutes]);
+  }, [resolveRouteLogs]);
 
-  /** Single approve/decline for non-resolution flags. */
   const decideOne = (log, decision) => {
     const outcome = decide(log.flag, decision);
-    if (!outcome) return; // resolution flags handled separately
+    if (!outcome) return;
     applyResolutions([{ logId: log.Id, outcome }]);
   };
 
   /**
-   * Bulk keep/remove applied to selected (or all visible pending). Works for
-   * every flag — including FLAG/OVERFLOW — by resolving each log against its
-   * route membership: keep → keep/add (Accepted), remove → remove/ignore (Declined).
+   * Bulk approve/decline using the same per-flag semantics as each card
+   * (e.g. REMOVE + Approve → remove stop; REMOVE + Decline → keep stop).
    */
-  const bulkResolve = (kind) => {
+  const bulkDecide = (decision) => {
     const targets = selected.size > 0 ? pendingVisible.filter((l) => selected.has(l.Id)) : pendingVisible;
     const items = targets.map((l) => {
-      const inRoute = !!l.Account__c && routeAccountIds.has(l.Account__c);
-      const outcome = kind === 'keep' ? (inRoute ? 'keep' : 'add') : (inRoute ? 'remove' : 'ignore');
+      let outcome = decide(l.flag, decision);
+      if (!outcome) {
+        // FLAG / OVERFLOW — fall back to membership-based resolution.
+        const inRoute = !!l.Account__c && routeAccountIds.has(l.Account__c);
+        outcome = decision === 'approve' ? (inRoute ? 'keep' : 'add') : (inRoute ? 'remove' : 'ignore');
+      }
       return { logId: l.Id, outcome };
     });
     applyResolutions(items);
@@ -215,7 +231,9 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
         <span className="text-ai text-xs">✦</span>
         <h3 className="text-[12px] font-semibold text-txt">AI Logs</h3>
         {routeName && <span className="text-[10px] text-txt-secondary bg-bg px-1.5 py-0.5 rounded truncate">{routeName}</span>}
-        {pendingTotal > 0 && <span className="text-[10px] font-semibold text-warning bg-warning/10 px-1.5 py-0.5 rounded-full shrink-0">{pendingTotal} pending</span>}
+        {analyzing && !stopsReady && <span className="text-[10px] font-semibold text-ai bg-ai/10 px-1.5 py-0.5 rounded-full shrink-0">Analyzing…</span>}
+        {analyzing && stopsReady && <span className="text-[10px] font-semibold text-ai bg-ai/10 px-1.5 py-0.5 rounded-full shrink-0">Finding adds…</span>}
+        {!analyzing && pendingTotal > 0 && <span className="text-[10px] font-semibold text-warning bg-warning/10 px-1.5 py-0.5 rounded-full shrink-0">{pendingTotal} pending</span>}
       </div>
       <div className="flex items-center gap-1 shrink-0">
         <button
@@ -240,96 +258,133 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     </div>
   );
 
+  const progressBanner = (
+    <div className="px-3 py-2 border-b border-border shrink-0 space-y-2 bg-ai-bg/30">
+      <AIProgressSteps
+        steps={aiJobSteps}
+        findings={stopsReady ? [] : aiJobFindings}
+        progress={aiJobProgress}
+        status={aiJobStatus}
+        compact
+      />
+      <div className="flex items-center justify-between gap-2">
+        <button type="button" className="text-[11px] text-txt-secondary hover:text-txt" onClick={() => refreshAIJob()}>
+          Refresh progress
+        </button>
+        {stopsReady && (
+          <span className="text-[10px] text-ai font-medium">
+            Stop recommendations ready — you can review while adds continue
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
+  const listBody = (
+    <>
+      {summary && (
+        <div className="px-3 py-2 border-b border-border bg-ai-bg/40 shrink-0">
+          <div className="text-[10px] font-semibold text-ai uppercase tracking-wider mb-0.5">AI Summary</div>
+          <p className="text-[11px] text-txt leading-relaxed">{summary}</p>
+        </div>
+      )}
+
+      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border shrink-0 flex-wrap">
+        {FILTERS.map((f) => (
+          <FilterChip key={f.key} flag={f.key} label={f.label} count={counts[f.key] || 0} active={filter === f.key} onClick={() => setFilter(f.key)} />
+        ))}
+        <div className="flex-1" />
+        <label className="text-[10px] text-txt-secondary">Sort</label>
+        <select
+          className="h-6 text-[11px] rounded-md border border-border bg-surface px-1.5 focus:border-primary focus:outline-none"
+          value={sortKey}
+          onChange={(e) => setSortKey(e.target.value)}
+        >
+          <option value="flag">Flag</option>
+          <option value="newest">Newest</option>
+          <option value="confidence">Confidence</option>
+        </select>
+      </div>
+
+      {!loading && pendingVisible.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-bg/40 shrink-0">
+          <Checkbox checked={allSelected} indeterminate={selectedCount > 0 && !allSelected} onChange={selectAll} />
+          <button className="text-[11px] font-medium text-txt hover:text-primary transition" onClick={selectAll}>
+            {allSelected ? 'Deselect all' : 'Select all'}
+          </button>
+          <span className="text-[10px] text-txt-secondary">{selectedCount} selected</span>
+        </div>
+      )}
+
+      <div className={`overflow-auto p-2.5 ${isModal ? 'flex-1' : 'max-h-[40vh]'}`}>
+        {loading ? (
+          <div className="flex items-center justify-center py-10 gap-2"><Spinner size="sm" /><span className="text-[12px] text-txt-secondary">Loading logs…</span></div>
+        ) : visible.length === 0 ? (
+          <div className="text-[12px] text-txt-secondary text-center py-10">No AI logs{filter !== 'ALL' ? ' for this flag' : ' for this route'}.</div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {visible.map((log) => (
+              <LogCard
+                key={log.Id}
+                log={log}
+                inRoute={!!log.Account__c && routeAccountIds.has(log.Account__c)}
+                selected={selected.has(log.Id)}
+                approving={!!approving[log.Id]}
+                commentsOpen={!!expandedComments[log.Id]}
+                detailOpen={detailLog?.Id === log.Id}
+                detailTab={detailTab}
+                onToggleSelect={() => toggleSelect(log.Id)}
+                onDecide={(decision) => decideOne(log, decision)}
+                onResolve={(outcome) => applyResolutions([{ logId: log.Id, outcome }])}
+                onToggleComments={() => toggleComments(log.Id)}
+                onOpen={() => openLog(log)}
+                onDetailTab={setDetailTab}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {!loading && pendingVisible.length > 0 && (
+        <div className="flex items-center justify-between px-3 py-1.5 border-t border-border bg-bg/50 shrink-0">
+          <span className="text-[10px] text-txt-secondary">
+            {selectedCount > 0 ? `Acting on ${selectedCount} selected` : `Acting on all ${pendingVisible.length} visible pending`}
+          </span>
+          <div className="flex gap-1.5">
+            <button
+              className="h-7 px-3 rounded-md bg-success text-white text-[11px] font-medium hover:bg-success/90 transition disabled:opacity-40"
+              disabled={pendingVisible.length === 0}
+              onClick={() => bulkDecide('approve')}
+            >
+              Approve All{selectedCount > 0 ? ' (Selected)' : ''}
+            </button>
+            <button
+              className="h-7 px-3 rounded-md bg-error text-white text-[11px] font-medium hover:bg-error/90 transition disabled:opacity-40"
+              disabled={pendingVisible.length === 0}
+              onClick={() => bulkDecide('decline')}
+            >
+              Decline All{selectedCount > 0 ? ' (Selected)' : ''}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // Keep existing Route Logs visible during analysis; progress sits above the list.
+  const body = analyzing
+    ? (
+      <>
+        {progressBanner}
+        {listBody}
+      </>
+    )
+    : listBody;
+
   const inner = (
     <>
       {header}
-      {showBody && (
-        <>
-          {/* Toolbar */}
-          <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border shrink-0 flex-wrap">
-            {FILTERS.map((f) => (
-              <FilterChip key={f.key} flag={f.key} label={f.label} count={counts[f.key] || 0} active={filter === f.key} onClick={() => setFilter(f.key)} />
-            ))}
-            <div className="flex-1" />
-            <label className="text-[10px] text-txt-secondary">Sort</label>
-            <select
-              className="h-6 text-[11px] rounded-md border border-border bg-surface px-1.5 focus:border-primary focus:outline-none"
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value)}
-            >
-              <option value="flag">Flag</option>
-              <option value="newest">Newest</option>
-              <option value="confidence">Confidence</option>
-            </select>
-          </div>
-
-          {/* Selection bar */}
-          {!loading && pendingVisible.length > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-bg/40 shrink-0">
-              <Checkbox checked={allSelected} indeterminate={selectedCount > 0 && !allSelected} onChange={selectAll} />
-              <button className="text-[11px] font-medium text-txt hover:text-primary transition" onClick={selectAll}>
-                {allSelected ? 'Deselect all' : 'Select all'}
-              </button>
-              <span className="text-[10px] text-txt-secondary">{selectedCount} selected</span>
-            </div>
-          )}
-
-          {/* Body */}
-          <div className={`overflow-auto p-2.5 ${isModal ? 'flex-1' : 'max-h-[40vh]'}`}>
-            {loading ? (
-              <div className="flex items-center justify-center py-10 gap-2"><Spinner size="sm" /><span className="text-[12px] text-txt-secondary">Loading logs…</span></div>
-            ) : visible.length === 0 ? (
-              <div className="text-[12px] text-txt-secondary text-center py-10">No AI logs{filter !== 'ALL' ? ' for this flag' : ' for this route'}.</div>
-            ) : (
-              <div className="flex flex-col gap-1.5">
-                {visible.map((log) => (
-                  <LogCard
-                    key={log.Id}
-                    log={log}
-                    inRoute={!!log.Account__c && routeAccountIds.has(log.Account__c)}
-                    selected={selected.has(log.Id)}
-                    approving={!!approving[log.Id]}
-                    commentsOpen={!!expandedComments[log.Id]}
-                    detailOpen={detailLog?.Id === log.Id}
-                    detailTab={detailTab}
-                    onToggleSelect={() => toggleSelect(log.Id)}
-                    onDecide={(decision) => decideOne(log, decision)}
-                    onResolve={(outcome) => applyResolutions([{ logId: log.Id, outcome }])}
-                    onToggleComments={() => toggleComments(log.Id)}
-                    onOpen={() => openLog(log)}
-                    onDetailTab={setDetailTab}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Footer — bulk actions */}
-          {!loading && pendingVisible.length > 0 && (
-            <div className="flex items-center justify-between px-3 py-1.5 border-t border-border bg-bg/50 shrink-0">
-              <span className="text-[10px] text-txt-secondary">
-                {selectedCount > 0 ? `Acting on ${selectedCount} selected` : `Acting on all ${pendingVisible.length} visible pending`}
-              </span>
-              <div className="flex gap-1.5">
-                <button
-                  className="h-7 px-3 rounded-md bg-success text-white text-[11px] font-medium hover:bg-success/90 transition disabled:opacity-40"
-                  disabled={pendingVisible.length === 0}
-                  onClick={() => bulkResolve('keep')}
-                >
-                  Keep All{selectedCount > 0 ? ' (Selected)' : ''}
-                </button>
-                <button
-                  className="h-7 px-3 rounded-md bg-error text-white text-[11px] font-medium hover:bg-error/90 transition disabled:opacity-40"
-                  disabled={pendingVisible.length === 0}
-                  onClick={() => bulkResolve('remove')}
-                >
-                  Remove All{selectedCount > 0 ? ' (Selected)' : ''}
-                </button>
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      {showBody && body}
     </>
   );
 
@@ -346,8 +401,6 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
   return <div className="bg-surface border border-border rounded-lg flex flex-col overflow-hidden">{inner}</div>;
 }
 
-/* ── Log card ────────────────────────────────────────────────────────── */
-
 const RESOLUTION_OPTIONS = {
   add: { o: 'add', label: 'Add', cls: 'text-ai border-ai/30 hover:bg-ai/10' },
   keep: { o: 'keep', label: 'Keep', cls: 'text-success border-success/30 hover:bg-success/10' },
@@ -362,7 +415,6 @@ function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, 
   const approveOutcome = decide(log.flag, 'approve');
   const declineOutcome = decide(log.flag, 'decline');
   const clickable = !!log.Account__c;
-  // Already a stop → keep/remove; not a stop → add.
   const resolutionKeys = inRoute ? ['keep', 'remove'] : ['add'];
 
   return (
@@ -390,7 +442,6 @@ function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, 
           </div>
           <p className="text-[11px] text-txt-secondary mt-0.5 leading-snug">{log.text}</p>
 
-          {/* Outcome hint / resolved status */}
           {isPending ? (
             !needsResolution ? (
               <div className="text-[9px] text-txt-secondary mt-1">
@@ -411,7 +462,6 @@ function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, 
           )}
         </div>
 
-        {/* Actions */}
         <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
           <CommentButton open={commentsOpen} count={log.CommentCount__c} onClick={onToggleComments} />
           {isPending && !needsResolution && (
@@ -427,7 +477,6 @@ function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, 
         </div>
       </div>
 
-      {/* Manager resolution for FLAG / OVERFLOW — options depend on route membership */}
       {isPending && needsResolution && (
         <div className="flex items-center gap-1.5 px-2 pb-2 pl-10 flex-wrap">
           <span className="text-[9px] text-txt-secondary uppercase tracking-wide">Decide:</span>
@@ -470,8 +519,6 @@ function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, 
     </div>
   );
 }
-
-/* ── Small controls ──────────────────────────────────────────────────── */
 
 function FilterChip({ flag, label, count, active, onClick }) {
   const meta = FLAG_META[flag];
@@ -518,8 +565,6 @@ function CommentButton({ open, count, onClick }) {
     </button>
   );
 }
-
-/* ── Comment thread (moved from RouteLogsPanel) ──────────────────────── */
 
 function LogCommentThread({ routeLogId }) {
   const [comments, setComments] = useState([]);

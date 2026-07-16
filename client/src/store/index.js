@@ -11,6 +11,7 @@ import generationSlice from './generationSlice';
 import planningSlice from './planningSlice';
 import aiJobSlice from './aiJobSlice';
 import compareSlice from './compareSlice';
+import routeLogsSlice from './routeLogsSlice';
 
 /** Combined Zustand store — all domain slices merged */
 const useStore = create(
@@ -27,6 +28,7 @@ const useStore = create(
       ...planningSlice(...a),
       ...aiJobSlice(...a),
       ...compareSlice(...a),
+      ...routeLogsSlice(...a),
     }),
     {
       // Keep the user's active context across page refreshes. Session-scoped so a

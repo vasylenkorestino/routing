@@ -6,6 +6,7 @@ const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters')
 const aiJobs = require('./aiJobs');
 const { publishJobProgress, progress } = require('./aiJobPublisher');
 const { analyzeRouteCompare } = require('../modules/routeCompare');
+const { saveEnhanceLogs } = require('./saveEnhanceLogs');
 const logger = require('../utils/logger');
 
 const TRUCK_CAPACITY_GAL = 1800;
@@ -34,8 +35,9 @@ const STEP_DEFS = [
   { id: 'compare_history', label: 'Reviewing historical routes' },
   { id: 'load_locations', label: 'Reviewing service locations' },
   { id: 'analyze_stops', label: 'Analyzing current stops' },
+  { id: 'save_stop_logs', label: 'Saving stop recommendations' },
   { id: 'find_adds', label: 'Finding add candidates' },
-  { id: 'save_logs', label: 'Saving recommendations' },
+  { id: 'save_logs', label: 'Saving add recommendations' },
 ];
 
 /** Initializes step checklist on a job. */
@@ -247,9 +249,35 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   const summary = stopsAnalysis.summary || '';
 
   setStep(jobId, 'analyze_stops', 'done');
-  aiJobs.mergePartialResults(jobId, { existingStops, summary });
   const flagged = existingStops.filter((s) => s.action === 'remove' || s.action === 'flag').length;
   aiJobs.addFinding(jobId, `Reviewed ${existingStops.length} stops — ${flagged} flagged for review`);
+
+  // Stage 1: persist stop recommendations immediately so the UI/map can show them
+  // while add-candidate analysis continues in the background.
+  const addressMap = {};
+  for (const s of stops.records) {
+    if (s.AccountId__c) addressMap[s.AccountId__c] = s.Container_Address__c || '';
+  }
+
+  setStep(jobId, 'save_stop_logs', 'running');
+  aiJobs.updateProgress(jobId, { step: 'save_stop_logs', label: 'Saving stop recommendations…', percent: 55 });
+  publishJobProgress(jobId);
+
+  const stopRecs = existingStops.map((r) => ({ ...r, _section: 'existing' }));
+  const savedStops = await saveEnhanceLogs(conn, googleRouteId, stopRecs, recorder);
+  const existingWithMeta = savedStops.map((rec) => ({
+    ...rec,
+    address: addressMap[rec.accountId] || '',
+  }));
+
+  aiJobs.mergePartialResults(jobId, {
+    existingStops: existingWithMeta,
+    summary,
+    stage: 'stops_ready',
+    stopsSaved: true,
+  });
+  aiJobs.addFinding(jobId, `Stop recommendations ready — reviewing adds next`);
+  setStep(jobId, 'save_stop_logs', 'done', `${existingWithMeta.length} stop logs`);
   aiJobs.updateProgress(jobId, { step: 'find_adds', label: 'Finding add candidates…', percent: 65 });
   publishJobProgress(jobId);
 
@@ -285,47 +313,12 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   setStep(jobId, 'find_adds', 'done', `${suggestedAdds.length} candidates`);
   aiJobs.mergePartialResults(jobId, { suggestedAdds });
   aiJobs.addFinding(jobId, `Found ${suggestedAdds.length} add candidates (${remainingCapacityGal} gal remaining capacity)`);
-  aiJobs.updateProgress(jobId, { step: 'save_logs', label: 'Saving recommendations…', percent: 85 });
+
+  // Stage 2: persist add recommendations only (stops already saved above).
+  setStep(jobId, 'save_logs', 'running', 'Saving add recommendations…');
+  aiJobs.updateProgress(jobId, { step: 'save_logs', label: 'Saving add recommendations…', percent: 90 });
   publishJobProgress(jobId);
 
-  setStep(jobId, 'save_logs', 'running');
-  const allRecs = [
-    ...existingStops.map((r) => ({ ...r, _section: 'existing' })),
-    ...suggestedAdds.map((r) => ({ ...r, action: 'add', _section: 'add' })),
-  ];
-
-  const logsToCreate = allRecs.map((rec) => ({
-    Google_Route__c: googleRouteId,
-    Account__c: rec.accountId || null,
-    Type__c: rec.action === 'add' ? 'Account Recommended' : (rec.action === 'keep' ? 'Account Added' : 'Account Recommended'),
-    Reason__c: `[${(rec.action || '').toUpperCase()}] ${rec.accountName || ''}: ${rec.reason || ''}`,
-    Confidence__c: (rec.confidence || 0) / 100,
-    Status__c: 'Proposed',
-    Skill__c: 'AI Enhance',
-  }));
-
-  let createdLogs = [];
-  if (logsToCreate.length > 0) {
-    createdLogs = await recorder.wrap(
-      'Create RouteLogs',
-      'Skill',
-      () => conn.sobject('RouteLog__c').create(logsToCreate),
-      { input: { count: logsToCreate.length } },
-    );
-  }
-
-  const logIds = Array.isArray(createdLogs) ? createdLogs.map((r) => r.id || r.Id).filter(Boolean) : [];
-  let savedLogs = [];
-  if (logIds.length > 0) {
-    const ids = logIds.map((id) => `'${id}'`).join(',');
-    const logResult = await conn.query(`SELECT Id, Name, Account__c, Type__c, Reason__c, Confidence__c, Status__c FROM RouteLog__c WHERE Id IN (${ids})`);
-    savedLogs = logResult.records;
-  }
-
-  const addressMap = {};
-  for (const s of stops.records) {
-    if (s.AccountId__c) addressMap[s.AccountId__c] = s.Container_Address__c || '';
-  }
   for (const a of nearbyAccounts) {
     if (a.accountId && !addressMap[a.accountId]) {
       const raw = nearbyResultRaw[a.accountId];
@@ -335,20 +328,19 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     }
   }
 
-  const result = allRecs.map((rec, i) => ({
+  const addRecs = suggestedAdds.map((r) => ({ ...r, action: 'add', _section: 'add' }));
+  const savedAdds = await saveEnhanceLogs(conn, googleRouteId, addRecs, recorder);
+  const additions = savedAdds.map((rec) => ({
     ...rec,
     address: addressMap[rec.accountId] || '',
-    logId: savedLogs[i]?.Id || logIds[i] || null,
-    logName: savedLogs[i]?.Name || null,
   }));
 
-  const existing = result.filter((r) => r._section === 'existing');
-  const additions = result.filter((r) => r._section === 'add');
+  setStep(jobId, 'save_logs', 'done', `${additions.length} add logs`);
+  aiJobs.mergePartialResults(jobId, { suggestedAdds: additions, stage: 'complete' });
 
-  setStep(jobId, 'save_logs', 'done');
   const responsePayload = {
     summary,
-    existingStops: existing,
+    existingStops: existingWithMeta,
     suggestedAdds: additions,
     totalStops: stops.records.length,
     nearbyCount: nearbyAccounts.length,

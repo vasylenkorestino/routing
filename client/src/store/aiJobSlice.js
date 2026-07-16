@@ -6,6 +6,7 @@ import * as routingApi from '../api/routing';
 const aiJobSlice = (set, get) => ({
   aiJobId: null,
   aiJobType: null,
+  aiJobMeta: null,
   aiJobStatus: 'idle',
   aiJobSteps: [],
   aiJobFindings: [],
@@ -16,10 +17,11 @@ const aiJobSlice = (set, get) => ({
   aiJobError: null,
 
   /** Starts tracking a job and fetches an immediate snapshot. */
-  trackAIJob: async (jobId, type) => {
+  trackAIJob: async (jobId, type, meta = null) => {
     set({
       aiJobId: jobId,
       aiJobType: type,
+      aiJobMeta: meta || null,
       aiJobStatus: 'running',
       aiJobSteps: [],
       aiJobFindings: [],
@@ -96,6 +98,7 @@ const aiJobSlice = (set, get) => ({
   clearAIJob: () => set({
     aiJobId: null,
     aiJobType: null,
+    aiJobMeta: null,
     aiJobStatus: 'idle',
     aiJobSteps: [],
     aiJobFindings: [],

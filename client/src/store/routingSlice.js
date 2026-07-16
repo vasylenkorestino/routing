@@ -38,6 +38,21 @@ function normalizeServiceDate(value) {
   const str = String(value);
   return str.includes('T') ? str.slice(0, 10) : str;
 }
+
+/** Normalizes Apex lastServicesByAccount map into { [accountId]: { services, account } }. */
+function normalizeLastServicesMap(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  Object.entries(raw).forEach(([accountId, bundle]) => {
+    if (!accountId || !bundle) return;
+    out[accountId] = {
+      services: Array.isArray(bundle.services) ? bundle.services : [],
+      account: bundle.account ?? null,
+    };
+  });
+  return out;
+}
+
 const routingSlice = (set, get) => ({
   isLoading: false,
   skipNextAutoLoad: false,
@@ -53,6 +68,25 @@ const routingSlice = (set, get) => ({
   drivers: [],
   sfInstanceUrl: null,
   aiSelectedRouteIds: {},
+  /** Preloaded / fetched Last Services keyed by Account Id. */
+  lastServicesByAccountId: {},
+
+  /** Replaces the Last Services cache (used after routing data load). */
+  setLastServicesCache: (map) => set({ lastServicesByAccountId: map || {} }),
+
+  /** Upserts one account's Last Services into the cache. */
+  cacheLastServices: (accountId, payload) => {
+    if (!accountId) return;
+    set((s) => ({
+      lastServicesByAccountId: {
+        ...s.lastServicesByAccountId,
+        [accountId]: {
+          services: payload?.services ?? [],
+          account: payload?.account ?? null,
+        },
+      },
+    }));
+  },
 
   // Bumped to force a live-traffic re-fetch of route ETAs (timeline + map chips).
   trafficRefreshNonce: 0,
@@ -81,7 +115,8 @@ const routingSlice = (set, get) => ({
       console.log('[loadRoutingData] params:', params);
       const data = await routingApi.getRoutingData(params);
       const routes = normalizeRoutes(data.routes ?? []);
-      console.log('[loadRoutingData] response:', { routes: routes.length, drivers: data?.drivers?.length, serviceLocations: data?.serviceLocations?.length });
+      const lastServicesByAccountId = normalizeLastServicesMap(data.lastServicesByAccount);
+      console.log('[loadRoutingData] response:', { routes: routes.length, drivers: data?.drivers?.length, serviceLocations: data?.serviceLocations?.length, lastServices: Object.keys(lastServicesByAccountId).length });
 
       // Honor an explicit target, otherwise keep the currently/persisted selected
       // route when it still exists for these filters (preserves context on refresh).
@@ -101,6 +136,7 @@ const routingSlice = (set, get) => ({
         routeId: selectedRoute ? (selectedRoute.Id ?? selectedRoute.id) : null,
         route: selectedRoute,
         aiSelectedRouteIds: {},
+        lastServicesByAccountId,
       });
 
       get().setLayerData('routes', routes, false);
@@ -181,10 +217,12 @@ const routingSlice = (set, get) => ({
       };
       const data = await routingApi.getRoutingData(params);
       const routes = normalizeRoutes(data.routes ?? []);
+      const lastServicesByAccountId = normalizeLastServicesMap(data.lastServicesByAccount);
       set({
         routes,
         drivers: data.drivers ?? get().drivers,
         serviceLocations: data.serviceLocations ?? get().serviceLocations,
+        lastServicesByAccountId,
       });
       get().setLayerData('routes', routes);
 
