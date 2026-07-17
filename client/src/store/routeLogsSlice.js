@@ -1,11 +1,12 @@
 import * as routingApi from '../api/routing';
 
+/** Default map layers: only Remove + Add (Keep / Flag / Overflow off). */
 const DEFAULT_FLAG_VISIBLE = {
   ADD: true,
-  KEEP: true,
+  KEEP: false,
   REMOVE: true,
-  FLAG: true,
-  OVERFLOW: true,
+  FLAG: false,
+  OVERFLOW: false,
 };
 
 /**

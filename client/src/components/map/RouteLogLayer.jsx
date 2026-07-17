@@ -53,8 +53,14 @@ export default function RouteLogLayer() {
     return routeLogs
       .filter((l) => l.Status__c === 'Proposed' && logCoords(l))
       .map((l) => ({ ...l, ...parseReason(l.Reason__c), coords: logCoords(l) }))
-      .filter((l) => flagVisible[l.flag] !== false);
-  }, [routeId, routeLogsRouteId, routeLogs, flagVisible]);
+      .filter((l) => {
+        // Accounts already on the route: only REMOVE is useful on the map
+        // (ADD/KEEP/FLAG for an existing stop just stacks on the stop marker).
+        const onRoute = !!l.Account__c && routeAccountIds.has(l.Account__c);
+        if (onRoute && l.flag !== 'REMOVE') return false;
+        return flagVisible[l.flag] !== false;
+      });
+  }, [routeId, routeLogsRouteId, routeLogs, flagVisible, routeAccountIds]);
 
   const popup = pending.find((l) => l.Id === popupId) || null;
 
