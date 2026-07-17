@@ -8,6 +8,8 @@ export const FLAG_META = {
   OVERFLOW: { label: 'Overflow Risk', badge: 'bg-orange-100 text-orange-600 border-orange-300', dot: 'bg-orange-500', hex: '#f97316' },
 };
 
+export const FLAG_ORDER = ['REMOVE', 'OVERFLOW', 'FLAG', 'ADD', 'KEEP'];
+
 export const OUTCOME_LABEL = {
   add: 'Add stop',
   keep: 'Keep stop',
@@ -38,18 +40,53 @@ export function parseReason(reason) {
   return { flag, text: m[2] };
 }
 
-/** SVG data-URL marker icon colored by flag. */
-export function routeLogMarkerIcon(flag) {
+/**
+ * SVG pin for a Route Log marker.
+ * - Selected: green check badge (readable at a glance among many pins)
+ * - Focused (opened in list): slightly larger + soft ring
+ * @param {string} flag
+ * @param {{ selected?: boolean, focused?: boolean }} [opts]
+ */
+export function routeLogMarkerIcon(flag, opts = {}) {
+  const { selected = false, focused = false } = opts;
   const hex = FLAG_META[flag]?.hex || FLAG_META.FLAG.hex;
+
+  // Canvas sized to fit pin + optional check badge / focus ring.
+  const w = focused || selected ? 40 : 28;
+  const h = focused || selected ? 48 : 36;
+  const cx = w / 2;
+  const cy = focused || selected ? 16 : 13;
+  const headR = focused || selected ? 6.5 : 5.5;
+  const tipY = h - 2;
+
+  const checkBadge = selected
+    ? `
+      <circle cx="${w - 8}" cy="9" r="8" fill="#16a34a" stroke="#ffffff" stroke-width="2"/>
+      <path d="M${w - 11.5} 9 l2.2 2.3 l5 -5.2"
+        fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    `
+    : '';
+
+  const focusRing = focused
+    ? `<circle cx="${cx}" cy="${cy}" r="14" fill="#2563eb" opacity="0.18"/>`
+    : '';
+
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">
-      <path d="M14 0C6.27 0 0 6.27 0 14c0 10.5 14 22 14 22s14-11.5 14-22C28 6.27 21.73 0 14 0z" fill="${hex}"/>
-      <circle cx="14" cy="13" r="6" fill="white"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+      <ellipse cx="${cx}" cy="${tipY}" rx="${selected || focused ? 8 : 6}" ry="2.2" fill="rgba(0,0,0,0.28)"/>
+      ${focusRing}
+      <path d="M${cx} 2C${(cx - 7.5).toFixed(1)} 2 ${(cx - 12).toFixed(1)} 7.5 ${(cx - 12).toFixed(1)} ${cy}
+        c0 9.5 12 20 12 20s12-10.5 12-20
+        C${(cx + 12).toFixed(1)} 7.5 ${(cx + 7.5).toFixed(1)} 2 ${cx} 2z"
+        fill="${hex}" stroke="#ffffff" stroke-width="2.25"/>
+      <circle cx="${cx}" cy="${cy}" r="${headR}" fill="#ffffff"/>
+      ${checkBadge}
     </svg>
   `;
+
   return {
-    url: 'data:image/svg+xml,' + encodeURIComponent(svg),
-    scaledSize: typeof google !== 'undefined' ? new google.maps.Size(28, 36) : undefined,
-    anchor: typeof google !== 'undefined' ? new google.maps.Point(14, 36) : undefined,
+    url: 'data:image/svg+xml,' + encodeURIComponent(svg.replace(/\s+/g, ' ').trim()),
+    scaledSize: typeof google !== 'undefined' ? new google.maps.Size(w, h) : undefined,
+    anchor: typeof google !== 'undefined' ? new google.maps.Point(cx, tipY) : undefined,
   };
 }

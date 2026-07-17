@@ -77,9 +77,15 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     return ids;
   }, [route]);
 
+  const selectedIds = useStore((s) => s.routeLogSelectedIds);
+  const toggleRouteLogSelected = useStore((s) => s.toggleRouteLogSelected);
+  const setRouteLogSelectedIds = useStore((s) => s.setRouteLogSelectedIds);
+  const clearRouteLogSelection = useStore((s) => s.clearRouteLogSelection);
+  const setRouteLogFocusedId = useStore((s) => s.setRouteLogFocusedId);
+  const routeLogFocusedId = useStore((s) => s.routeLogFocusedId);
+
   const [filter, setFilter] = useState('ALL');
   const [sortKey, setSortKey] = useState('flag');
-  const [selected, setSelected] = useState(() => new Set());
   const [expandedComments, setExpandedComments] = useState({});
   const [detailLog, setDetailLog] = useState(null);
   const [detailTab, setDetailTab] = useState('services');
@@ -90,10 +96,11 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
   useEffect(() => {
     fetchRouteLogs(googleRouteId);
     clearRouteLogsSummary();
-    setSelected(new Set());
+    clearRouteLogSelection();
+    setRouteLogFocusedId(null);
     setDetailLog(null);
     handledStopsReadyRef.current = null;
-  }, [googleRouteId, fetchRouteLogs, clearRouteLogsSummary]);
+  }, [googleRouteId, fetchRouteLogs, clearRouteLogsSummary, clearRouteLogSelection, setRouteLogFocusedId]);
 
   // Auto-expand while AI Enhance is analyzing this route.
   useEffect(() => {
@@ -154,20 +161,24 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
   }, [decorated, filter, sortKey]);
 
   const pendingVisible = useMemo(() => visible.filter((l) => l.Status__c === 'Proposed'), [visible]);
-  const allSelected = pendingVisible.length > 0 && pendingVisible.every((l) => selected.has(l.Id));
+  const allSelected = pendingVisible.length > 0 && pendingVisible.every((l) => selectedIds[l.Id]);
   const pendingTotal = decorated.filter((l) => l.Status__c === 'Proposed').length;
+  const selectedCount = Object.keys(selectedIds).filter((id) => pendingVisible.some((l) => l.Id === id)).length;
 
-  const toggleSelect = (id) => setSelected((prev) => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
-  const selectAll = () => setSelected(allSelected ? new Set() : new Set(pendingVisible.map((l) => l.Id)));
+  const toggleSelect = (id) => toggleRouteLogSelected(id);
+  const selectAll = () => {
+    if (allSelected) setRouteLogSelectedIds([]);
+    else setRouteLogSelectedIds(pendingVisible.map((l) => l.Id));
+  };
   const toggleComments = (id) => setExpandedComments((p) => ({ ...p, [id]: !p[id] }));
 
   /** Selecting a row focuses the account on the map and opens its Last Services detail. */
   const openLog = useCallback((log) => {
-    setDetailLog((prev) => (prev?.Id === log.Id ? null : log));
+    setDetailLog((prev) => {
+      const next = prev?.Id === log.Id ? null : log;
+      setRouteLogFocusedId(next?.Id || null);
+      return next;
+    });
     setDetailTab('services');
     const lat = Number(log.Account__r?.MALatitude__c);
     const lng = Number(log.Account__r?.MALongitude__c);
@@ -175,17 +186,12 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
       setMapCenter({ lat, lng });
       setMapZoom(15);
     }
-  }, [setMapCenter, setMapZoom]);
+  }, [setMapCenter, setMapZoom, setRouteLogFocusedId]);
 
   const applyResolutions = useCallback(async (items) => {
     if (!items.length) return;
     try {
       await resolveRouteLogs(items);
-      setSelected((prev) => {
-        const n = new Set(prev);
-        items.forEach((i) => n.delete(i.logId));
-        return n;
-      });
     } catch (err) {
       toast.error(getErrorMessage(err));
     }
@@ -202,7 +208,8 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
    * (e.g. REMOVE + Approve → remove stop; REMOVE + Decline → keep stop).
    */
   const bulkDecide = (decision) => {
-    const targets = selected.size > 0 ? pendingVisible.filter((l) => selected.has(l.Id)) : pendingVisible;
+    const hasSelection = pendingVisible.some((l) => selectedIds[l.Id]);
+    const targets = hasSelection ? pendingVisible.filter((l) => selectedIds[l.Id]) : pendingVisible;
     const items = targets.map((l) => {
       let outcome = decide(l.flag, decision);
       if (!outcome) {
@@ -215,7 +222,6 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     applyResolutions(items);
   };
 
-  const selectedCount = selected.size;
   const showBody = isModal || !collapsed;
 
   const header = (
@@ -328,7 +334,8 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
                 key={log.Id}
                 log={log}
                 inRoute={!!log.Account__c && routeAccountIds.has(log.Account__c)}
-                selected={selected.has(log.Id)}
+                selected={!!selectedIds[log.Id]}
+                mapFocused={routeLogFocusedId === log.Id}
                 approving={!!approving[log.Id]}
                 commentsOpen={!!expandedComments[log.Id]}
                 detailOpen={detailLog?.Id === log.Id}
@@ -408,7 +415,7 @@ const RESOLUTION_OPTIONS = {
   ignore: { o: 'ignore', label: 'Ignore', cls: 'text-txt-secondary border-border hover:bg-bg' },
 };
 
-function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, detailTab, onToggleSelect, onDecide, onResolve, onToggleComments, onOpen, onDetailTab }) {
+function LogCard({ log, inRoute, selected, mapFocused, approving, commentsOpen, detailOpen, detailTab, onToggleSelect, onDecide, onResolve, onToggleComments, onOpen, onDetailTab }) {
   const meta = FLAG_META[log.flag] || FLAG_META.FLAG;
   const isPending = log.Status__c === 'Proposed';
   const needsResolution = NEEDS_RESOLUTION.has(log.flag);
@@ -416,11 +423,17 @@ function LogCard({ log, inRoute, selected, approving, commentsOpen, detailOpen, 
   const declineOutcome = decide(log.flag, 'decline');
   const clickable = !!log.Account__c;
   const resolutionKeys = inRoute ? ['keep', 'remove'] : ['add'];
+  const isActive = detailOpen || mapFocused;
+  const ring = isActive
+    ? 'ring-2 ring-primary border-primary shadow-md bg-primary/5'
+    : selected
+      ? 'ring-2 ring-primary/40 border-primary/40 bg-primary/[0.03]'
+      : 'hover:ring-2 hover:ring-primary/25 hover:border-primary/30 hover:shadow-sm hover:bg-bg/70 hover:scale-[1.015]';
 
   return (
-    <div className={`rounded-lg border transition ${isPending ? 'border-border bg-surface' : 'border-border/60 bg-bg/40 opacity-70'} ${detailOpen ? 'ring-1 ring-primary/40' : selected ? 'ring-1 ring-primary/20' : ''}`}>
+    <div className={`rounded-lg border origin-center transition duration-150 ease-out ${isPending ? 'border-border bg-surface' : 'border-border/60 bg-bg/40 opacity-70'} ${ring}`}>
       <div
-        className={`flex items-start gap-2 p-2 ${clickable ? 'cursor-pointer hover:bg-bg/40' : ''}`}
+        className={`flex items-start gap-2 p-2 ${clickable ? 'cursor-pointer' : ''} ${isActive ? 'p-2.5' : ''}`}
         onClick={() => clickable && onOpen()}
       >
         {isPending ? (

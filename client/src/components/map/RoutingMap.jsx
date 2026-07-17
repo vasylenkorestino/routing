@@ -9,6 +9,7 @@ import RouteLogLayer from './RouteLogLayer';
 import ShapeLayer from './ShapeLayer';
 import MapOverlayPanel from './MapOverlayPanel';
 import MapLegend from './MapLegend';
+import RouteLogLegend from './RouteLogLegend';
 
 const LIBRARIES = ['geometry'];
 
@@ -175,7 +176,8 @@ export default function RoutingMap() {
       )}
     </GoogleMap>
 
-    {/* Stop status legend — hidden in compare mode where markers use route colors */}
+    {/* AI flag layers + stop status legends — hidden in compare mode */}
+    {routeId && !compareMode && <RouteLogLegend />}
     {layers.routes.visible && !compareMode && <MapLegend />}
     </div>
     <MapOverlayPanel />

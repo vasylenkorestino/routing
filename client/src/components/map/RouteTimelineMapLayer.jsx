@@ -9,13 +9,16 @@ import { legMidpointOnPath } from '../../utils/routeGeometry';
 const MIN_ZOOM_CHIPS = 9;
 const MIN_ZOOM_LEG_LABELS = 11;
 
-/** Vertical gap between a stop marker's center and its ETA chip (px). */
-const CHIP_OFFSET_PX = 26;
+/**
+ * Place ETA chips just below the stop marker so they don't cover AI flag pins
+ * (which sit above the numbered stop circles).
+ */
+const CHIP_BELOW_PX = 18;
 
-const chipOffset = (w, h) => ({ x: -w / 2, y: -h - CHIP_OFFSET_PX });
+const chipOffset = (w) => ({ x: -w / 2, y: CHIP_BELOW_PX });
 const centerOffset = (w, h) => ({ x: -w / 2, y: -h / 2 });
 
-/** Small time badge floating above a stop / depot marker. */
+/** Small time badge floating below a stop / depot marker. */
 function EtaChip({ node, onClick, isNext }) {
   const color = node.kind === 'stop' ? (node.status?.color ?? '#2563eb') : node.kind === 'start' ? '#10b981' : '#ef4444';
   const prefix = node.kind === 'start' ? 'Start ' : node.kind === 'end' ? 'End ' : isNext ? 'Next · ' : '';
@@ -60,7 +63,7 @@ function LegLabel({ position, label }) {
 }
 
 /**
- * Timeline overlay for the selected route: ETA chips above each stop/depot
+ * Timeline overlay for the selected route: ETA chips below each stop/depot
  * marker and drive-time labels placed on the polyline mid-leg. Shares
  * useRouteTimeline (and its Directions cache) with the details-panel timeline
  * so both stay in sync on add/remove/reorder. Hidden at low zoom to avoid

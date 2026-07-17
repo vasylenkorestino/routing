@@ -21,7 +21,7 @@ function logCoords(log) {
 
 /**
  * Map markers for pending AI Enhance RouteLog__c rows, colored by flag.
- * Click opens a popup with AI reasoning and Keep / Decline actions.
+ * Selected = green check badge; unselected dim when any selection exists.
  */
 export default function RouteLogLayer() {
   const routeId = useStore((s) => s.routeId);
@@ -29,8 +29,14 @@ export default function RouteLogLayer() {
   const routeLogsRouteId = useStore((s) => s.routeLogsRouteId);
   const approving = useStore((s) => s.routeLogsApproving);
   const resolveRouteLog = useStore((s) => s.resolveRouteLog);
+  const selectedIds = useStore((s) => s.routeLogSelectedIds);
+  const focusedId = useStore((s) => s.routeLogFocusedId);
+  const flagVisible = useStore((s) => s.routeLogFlagVisible);
+  const toggleSelected = useStore((s) => s.toggleRouteLogSelected);
+  const setFocusedId = useStore((s) => s.setRouteLogFocusedId);
   const route = useStore((s) => s.route);
-  const [selectedId, setSelectedId] = useState(null);
+  const [popupId, setPopupId] = useState(null);
+  const hasSelection = Object.keys(selectedIds).length > 0;
 
   const routeAccountIds = useMemo(() => {
     const stops = route?.Routes__r?.records ?? route?.Routes__r ?? [];
@@ -46,17 +52,18 @@ export default function RouteLogLayer() {
     if (!routeId || routeLogsRouteId !== routeId) return [];
     return routeLogs
       .filter((l) => l.Status__c === 'Proposed' && logCoords(l))
-      .map((l) => ({ ...l, ...parseReason(l.Reason__c), coords: logCoords(l) }));
-  }, [routeId, routeLogsRouteId, routeLogs]);
+      .map((l) => ({ ...l, ...parseReason(l.Reason__c), coords: logCoords(l) }))
+      .filter((l) => flagVisible[l.flag] !== false);
+  }, [routeId, routeLogsRouteId, routeLogs, flagVisible]);
 
-  const selected = pending.find((l) => l.Id === selectedId) || null;
+  const popup = pending.find((l) => l.Id === popupId) || null;
 
   const handleAction = useCallback(async (log, decisionOrOutcome, isOutcome = false) => {
     const outcome = isOutcome ? decisionOrOutcome : decide(log.flag, decisionOrOutcome);
     if (!outcome) return;
     try {
       await resolveRouteLog({ logId: log.Id, outcome });
-      setSelectedId(null);
+      setPopupId(null);
       toast.success(outcome === 'add' || outcome === 'keep' ? 'Accepted' : 'Declined');
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -67,26 +74,37 @@ export default function RouteLogLayer() {
 
   return (
     <>
-      {pending.map((log) => (
-        <Marker
-          key={log.Id}
-          position={log.coords}
-          onClick={() => setSelectedId(log.Id)}
-          icon={routeLogMarkerIcon(log.flag)}
-          title={`${FLAG_META[log.flag]?.label || log.flag}: ${log.Account__r?.Name || log.Name}`}
-          zIndex={120}
-        />
-      ))}
+      {pending.map((log) => {
+        const selected = !!selectedIds[log.Id];
+        const focused = focusedId === log.Id;
+        return (
+          <Marker
+            key={log.Id}
+            position={log.coords}
+            onClick={() => {
+              toggleSelected(log.Id);
+              setPopupId(log.Id);
+              setFocusedId(log.Id);
+            }}
+            icon={routeLogMarkerIcon(log.flag, { selected, focused })}
+            opacity={hasSelection && !selected && !focused ? 0.45 : 1}
+            title={`${FLAG_META[log.flag]?.label || log.flag}: ${log.Account__r?.Name || log.Name}${selected ? ' (selected)' : ''}`}
+            zIndex={focused ? 220 : selected ? 180 : 120}
+          />
+        );
+      })}
 
-      {selected && (
+      {popup && (
         <InfoWindow
-          position={selected.coords}
-          onCloseClick={() => setSelectedId(null)}
+          position={popup.coords}
+          onCloseClick={() => setPopupId(null)}
         >
           <RouteLogPopup
-            log={selected}
-            inRoute={!!selected.Account__c && routeAccountIds.has(selected.Account__c)}
-            approving={!!approving[selected.Id]}
+            log={popup}
+            inRoute={!!popup.Account__c && routeAccountIds.has(popup.Account__c)}
+            approving={!!approving[popup.Id]}
+            selected={!!selectedIds[popup.Id]}
+            onToggleSelect={() => toggleSelected(popup.Id)}
             onAction={handleAction}
           />
         </InfoWindow>
@@ -96,7 +114,7 @@ export default function RouteLogLayer() {
 }
 
 /** Compact InfoWindow content for a pending AI route log. */
-function RouteLogPopup({ log, inRoute, approving, onAction }) {
+function RouteLogPopup({ log, inRoute, approving, selected, onToggleSelect, onAction }) {
   const meta = FLAG_META[log.flag] || FLAG_META.FLAG;
   const needsResolution = NEEDS_RESOLUTION.has(log.flag);
   const btnStyle = {
@@ -112,7 +130,7 @@ function RouteLogPopup({ log, inRoute, approving, onAction }) {
 
   return (
     <div style={{ fontFamily: 'sans-serif', fontSize: 13, minWidth: 220, maxWidth: 300 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
         <span style={{
           fontSize: 10,
           fontWeight: 700,
@@ -129,6 +147,24 @@ function RouteLogPopup({ log, inRoute, approving, onAction }) {
           <span style={{ fontSize: 10, color: '#888' }}>{Math.round(log.Confidence__c * 100)}%</span>
         )}
         <span style={{ fontSize: 10, color: '#aaa' }}>{log.Name}</span>
+        <button
+          type="button"
+          onClick={onToggleSelect}
+          style={{
+            marginLeft: 'auto',
+            height: 22,
+            padding: '0 8px',
+            fontSize: 10,
+            fontWeight: 600,
+            borderRadius: 6,
+            border: selected ? '1px solid #2563eb' : '1px solid #cbd5e1',
+            background: selected ? '#dbeafe' : '#fff',
+            color: selected ? '#2563eb' : '#64748b',
+            cursor: 'pointer',
+          }}
+        >
+          {selected ? 'Selected' : 'Select'}
+        </button>
       </div>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>
         {log.Account__r?.Name || 'Account'}
