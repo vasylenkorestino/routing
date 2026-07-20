@@ -615,6 +615,192 @@ router.post('/approve', async (req, res, next) => {
 });
 
 /**
+ * POST /api/enhance-route/undo — reverse an accept/decline back to Proposed.
+ *
+ * Body: { logIds: string[], outcomes?: { [logId]: 'add'|'keep'|'remove'|'ignore' } }
+ * Client `_outcome` is preferred when present; otherwise outcome is inferred from
+ * Status + Reason flag + whether the Account stop still exists on the route.
+ */
+router.post('/undo', async (req, res, next) => {
+  try {
+    const logIds = Array.isArray(req.body?.logIds) ? req.body.logIds.filter(Boolean) : [];
+    const outcomes = req.body?.outcomes && typeof req.body.outcomes === 'object' ? req.body.outcomes : {};
+    if (!logIds.length) return res.status(400).json({ error: 'logIds required' });
+
+    const conn = await getConnection();
+    const idList = logIds.map((id) => `'${id}'`).join(',');
+    const q = await conn.query(
+      `SELECT Id, Status__c, Account__c, Google_Route__c, Reason__c
+       FROM RouteLog__c WHERE Id IN (${idList})`
+    );
+    const logs = q.records || [];
+    if (!logs.length) return res.status(404).json({ error: 'No RouteLog__c found' });
+
+    const routeIds = [...new Set(logs.map((l) => l.Google_Route__c).filter(Boolean))];
+    const accountIds = [...new Set(logs.map((l) => l.Account__c).filter(Boolean))];
+
+    // Existing stops for these accounts on the affected routes.
+    const stopKeys = new Set();
+    if (routeIds.length && accountIds.length) {
+      const rList = routeIds.map((id) => `'${id}'`).join(',');
+      const aList = accountIds.map((id) => `'${id}'`).join(',');
+      const stops = await conn.query(
+        `SELECT Id, AccountId__c, GRoute_Id__c FROM Route__c
+         WHERE GRoute_Id__c IN (${rList}) AND AccountId__c IN (${aList})`
+      );
+      (stops.records || []).forEach((p) => {
+        stopKeys.add(`${p.AccountId__c}_${p.GRoute_Id__c}`);
+      });
+    }
+
+    const undidAdd = [];
+    const undidRemove = [];
+    const resetIds = [];
+
+    for (const log of logs) {
+      if (log.Status__c === 'Proposed') continue;
+      const flag = flagFromReason(log.Reason__c);
+      const key = log.Account__c && log.Google_Route__c
+        ? `${log.Account__c}_${log.Google_Route__c}`
+        : null;
+      const stopExists = key ? stopKeys.has(key) : false;
+      const outcome = outcomes[log.Id] || inferUndoOutcome(log.Status__c, flag, stopExists);
+
+      if (outcome === 'add' && stopExists && log.Account__c && log.Google_Route__c) {
+        const pts = await conn.query(
+          `SELECT Id FROM Route__c
+           WHERE GRoute_Id__c = '${log.Google_Route__c}' AND AccountId__c = '${log.Account__c}'`
+        );
+        if (pts.records?.length) {
+          await conn.sobject('Route__c').destroy(pts.records.map((p) => p.Id));
+          stopKeys.delete(key);
+          undidAdd.push(log.Id);
+        }
+      } else if (outcome === 'remove' && !stopExists && log.Account__c && log.Google_Route__c) {
+        const inserted = await insertAiRouteStop(conn, log.Account__c, log.Google_Route__c);
+        if (inserted) {
+          stopKeys.add(key);
+          undidRemove.push(log.Id);
+        }
+      }
+
+      resetIds.push(log.Id);
+    }
+
+    if (resetIds.length) {
+      // Clear Accepted_* via fieldsToNull so undo leaves a clean Proposed row.
+      const updates = resetIds.map((id) => ({
+        Id: id,
+        Status__c: 'Proposed',
+        fieldsToNull: ['Accepted_By__c', 'Accepted_Date__c'],
+      }));
+      await conn.sobject('RouteLog__c').update(updates);
+
+      for (const id of resetIds) {
+        enqueueFeedback({
+          type: 'route_log_status',
+          logId: id,
+          status: 'Proposed',
+          outcome: 'undo',
+          source: 'enhance_undo',
+        });
+      }
+    }
+
+    const membershipChanged = undidAdd.length || undidRemove.length;
+    if (membershipChanged) {
+      const changedRouteIds = [...new Set(
+        logs
+          .filter((l) => undidAdd.includes(l.Id) || undidRemove.includes(l.Id))
+          .map((l) => l.Google_Route__c)
+          .filter(Boolean)
+      )];
+      for (const routeId of changedRouteIds) {
+        try {
+          await reoptimizeRoute(conn, routeId);
+        } catch (err) {
+          logger.warn('[enhance/undo] re-optimize skipped', { routeId, error: err.message });
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      updated: resetIds.length,
+      undidAdd,
+      undidRemove,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Parses [FLAG] prefix from RouteLog Reason__c. */
+function flagFromReason(reason) {
+  if (!reason) return 'FLAG';
+  const m = String(reason).match(/^\[(\w+)\]/);
+  if (!m) return 'FLAG';
+  const token = m[1].toUpperCase();
+  return ['ADD', 'KEEP', 'REMOVE', 'FLAG', 'OVERFLOW'].includes(token) ? token : 'FLAG';
+}
+
+/**
+ * Infers prior approve outcome when the client did not send `_outcome`.
+ * Accepted+ADD+stop → add; Declined+(REMOVE|KEEP)+no stop → remove; else keep/ignore.
+ */
+function inferUndoOutcome(status, flag, stopExists) {
+  if (status === 'Accepted' && flag === 'ADD' && stopExists) return 'add';
+  if (status === 'Declined' && (flag === 'REMOVE' || flag === 'KEEP') && !stopExists) return 'remove';
+  if (status === 'Accepted') return 'keep';
+  return 'ignore';
+}
+
+/** Inserts an AI Route__c stop for undo-remove (mirrors RouteLogTriggerHelper fields). */
+async function insertAiRouteStop(conn, accountId, googleRouteId) {
+  const existing = await conn.query(
+    `SELECT Id FROM Route__c
+     WHERE GRoute_Id__c = '${googleRouteId}' AND AccountId__c = '${accountId}' LIMIT 1`
+  );
+  if (existing.records?.length) return false;
+
+  const acctQ = await conn.query(
+    `SELECT Id, Name, ShippingStreet, ShippingCity, ShippingState,
+            MALatitude__c, MALongitude__c, Rotisserie_Collection__c
+     FROM Account WHERE Id = '${accountId}' LIMIT 1`
+  );
+  const routeQ = await conn.query(
+    `SELECT Id, Name, Service_Date__c FROM Google_Route__c WHERE Id = '${googleRouteId}' LIMIT 1`
+  );
+  const acct = acctQ.records?.[0];
+  const gRoute = routeQ.records?.[0];
+  if (!acct || !gRoute) return false;
+
+  const addr = [
+    acct.ShippingStreet || '',
+    [acct.ShippingCity, acct.ShippingState].filter(Boolean).join(', '),
+  ].join(' ').trim();
+
+  await conn.sobject('Route__c').create({
+    Account__c: acct.Id,
+    AccountId__c: acct.Id,
+    Account_Name__c: acct.Name,
+    Container_Address__c: addr,
+    Latitude__c: acct.MALatitude__c,
+    Longitude__c: acct.MALongitude__c,
+    Google_Route_Id__c: gRoute.Id,
+    GRoute_Id__c: gRoute.Id,
+    Name: gRoute.Name,
+    DateOfService__c: gRoute.Service_Date__c,
+    Status__c: 'New',
+    Notes__c: '',
+    Driver_Name__c: '',
+    isAI__c: true,
+    ServiceType__c: acct.Rotisserie_Collection__c === true ? 'Rotisserie Water' : 'UCO Collection',
+  });
+  return true;
+}
+
+/**
  * Re-optimizes a route in place via the Apex optimize-route endpoint (the same
  * optimizer used elsewhere in the app). Throws if the route has no start/end
  * Service Location, which callers handle as a best-effort skip.

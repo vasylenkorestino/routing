@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import useStore from '../store';
 import { slCoord } from '../utils/routeGeometry';
 import { getTodayET } from '../utils/date';
@@ -23,13 +23,13 @@ import {
 /** Directions API limit: origin + 23 waypoints + destination per request. */
 const CHUNK_SIZE = 23;
 
-/** Live-traffic ETAs re-fetch on this cadence (also the cache-key bucket size). */
-const TRAFFIC_BUCKET_MS = 5 * 60 * 1000;
-
 /** Module-level caches shared by all hook instances (panel + map layer). */
-const legCache = new Map(); // signature -> number[] seconds per leg
-const inflight = new Map(); // signature -> Promise<number[]|null>
+const legCache = new Map(); // cacheKey -> number[] seconds per leg
+const inflight = new Map(); // cacheKey -> Promise<number[]|null>
 const LEG_CACHE_CAP = 50;
+
+/** Routes that already received their one-time initial Directions fetch. */
+const initialFetchedRouteIds = new Set();
 
 /**
  * Per-leg traffic-free drive seconds for one chunk, or null on failure.
@@ -109,9 +109,8 @@ async function fetchLegSeconds(coords, departureTime = null) {
 }
 
 /**
- * Cached + deduped leg durations for a cache key. The key is the coordinate
- * signature for traffic-free routes, or signature + 5-minute time bucket for
- * traffic-aware routes (so live ETAs refresh instead of freezing on a cache hit).
+ * Cached + deduped leg durations for a cache key (signature, or signature +
+ * refresh nonce for traffic-aware fetches).
  */
 function getLegSeconds(cacheKey, coords, departureTime = null) {
   if (legCache.has(cacheKey)) return Promise.resolve(legCache.get(cacheKey));
@@ -132,9 +131,9 @@ function getLegSeconds(cacheKey, coords, departureTime = null) {
  * Timing model for a route's journey: ordered nodes (start depot → stops →
  * end depot) with per-node arrival labels and per-leg drive times.
  *
- * Leg durations come from the Google Directions API (cached by the ordered
- * coordinate signature, so add/remove/reorder recomputes automatically) with
- * an instant haversine estimate shown until real data arrives.
+ * Leg durations come from the Google Directions API. Travel times fetch once
+ * when a route is first loaded, then only again when the user clicks Live
+ * Traffic — stop add/remove/reorder does not auto-recalculate Directions.
  *
  * Time anchoring: when at least one stop is completed, the latest completed
  * stop's LastModifiedDate pins the schedule to real clock times; otherwise
@@ -171,48 +170,85 @@ export default function useRouteTimeline(route) {
   // Live traffic ("leave now") for today/future routes; past routes fall back to
   // traffic-free typical times (Google rejects past departure times).
   const useTraffic = !(route?.Service_Date__c && route.Service_Date__c < getTodayET());
+  const routeKey = route?.Id || '';
 
-  // 5-minute bucket rotates the cache key and drives periodic live refresh.
-  const [trafficBucket, setTrafficBucket] = useState(() => Math.floor(Date.now() / TRAFFIC_BUCKET_MS));
-  useEffect(() => {
-    if (!useTraffic) return undefined;
-    const id = setInterval(
-      () => setTrafficBucket(Math.floor(Date.now() / TRAFFIC_BUCKET_MS)),
-      TRAFFIC_BUCKET_MS,
-    );
-    return () => clearInterval(id);
-  }, [useTraffic]);
-
-  // Manual refresh (nonce) forces a fresh key -> cache miss -> traffic re-fetch,
-  // and because the nonce lives in the store, the timeline and map chips refresh together.
-  const cacheKey = signature
-    ? (useTraffic ? `${signature}|t${trafficBucket}|r${trafficRefreshNonce}` : signature)
-    : '';
-
-  // Haversine estimate first; swapped for Directions data when it resolves.
-  // Stored legs are tagged with the route-shape `signature` (not the full
-  // cacheKey). A traffic refresh (bucket/nonce change) keeps the last real legs
-  // visible while the new ones load — stale-while-revalidate — so the display
-  // never flashes back to the haversine estimate and then "reverts".
+  // Haversine estimate when shape changes; Directions only on first load + Live Traffic.
   const [directions, setDirections] = useState(null);
   const [trafficLoading, setTrafficLoading] = useState(false);
+  const prevNonceRef = useRef(trafficRefreshNonce);
+  const prevSigRef = useRef('');
 
   useEffect(() => {
-    const cached = legCache.get(cacheKey);
-    if (cached) {
-      setDirections({ sig: signature, legs: cached });
-      setTrafficLoading(false);
-      return undefined;
-    }
-    if (!cacheKey || coords.length < 2) {
+    if (!signature || coords.length < 2 || !routeKey) {
       setDirections(null);
       setTrafficLoading(false);
       return undefined;
     }
 
-    // Same route shape → keep prior legs during the refetch (no flash); a
-    // different shape invalidates the leg count, so fall back to the estimate.
-    setDirections((prev) => (prev && prev.sig === signature ? prev : null));
+    const nonceChanged = prevNonceRef.current !== trafficRefreshNonce;
+    prevNonceRef.current = trafficRefreshNonce;
+
+    const sigChanged = prevSigRef.current !== signature;
+    prevSigRef.current = signature;
+
+    // Shape changed → drop mismatched legs (show estimates until Live Traffic).
+    if (sigChanged) {
+      setDirections((prev) => (prev && prev.sig === signature ? prev : null));
+    }
+
+    const needsInitial = !initialFetchedRouteIds.has(routeKey);
+    const shouldFetch = needsInitial || nonceChanged;
+    const cacheKey = useTraffic ? `${signature}|r${trafficRefreshNonce}` : signature;
+
+    /** Finds cached legs for this route shape (any refresh nonce). */
+    const cachedForSig = () => {
+      if (legCache.has(cacheKey)) return legCache.get(cacheKey);
+      for (const [k, legs] of legCache.entries()) {
+        if (k === signature || k.startsWith(`${signature}|`)) return legs;
+      }
+      return null;
+    };
+
+    // Hydrate from shared module cache (other hook instances may have fetched).
+    if (!nonceChanged) {
+      const cached = cachedForSig();
+      if (cached) {
+        setDirections({ sig: signature, legs: cached });
+        setTrafficLoading(false);
+        initialFetchedRouteIds.add(routeKey);
+        if (!shouldFetch) return undefined;
+      }
+    }
+
+    if (!shouldFetch) {
+      // Another instance may already be fetching — adopt legs when ready.
+      const pendingKey = [...inflight.keys()].find(
+        (k) => k === signature || k.startsWith(`${signature}|`)
+      );
+      if (pendingKey) {
+        let cancelled = false;
+        inflight.get(pendingKey).then((legs) => {
+          if (cancelled || !legs) return;
+          initialFetchedRouteIds.add(routeKey);
+          setDirections({ sig: signature, legs });
+        });
+        return () => { cancelled = true; };
+      }
+      return undefined;
+    }
+
+    const cached = legCache.get(cacheKey);
+    if (cached) {
+      setDirections({ sig: signature, legs: cached });
+      setTrafficLoading(false);
+      initialFetchedRouteIds.add(routeKey);
+      return undefined;
+    }
+
+    // Manual refresh on same shape: keep prior legs while loading (no flash).
+    if (nonceChanged && !sigChanged) {
+      setDirections((prev) => (prev && prev.sig === signature ? prev : null));
+    }
     setTrafficLoading(true);
 
     let cancelled = false;
@@ -220,14 +256,17 @@ export default function useRouteTimeline(route) {
       const departureTime = useTraffic ? new Date() : null;
       getLegSeconds(cacheKey, coords, departureTime).then((legs) => {
         if (cancelled) return;
-        if (legs) setDirections({ sig: signature, legs });
+        if (legs) {
+          initialFetchedRouteIds.add(routeKey);
+          setDirections({ sig: signature, legs });
+        }
         setTrafficLoading(false);
       });
-    }, 300); // debounce rapid reorder/add/remove bursts
+    }, 300);
 
     return () => { cancelled = true; clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cacheKey]);
+  }, [signature, trafficRefreshNonce, routeKey, useTraffic]);
 
   const directionsLegs = directions?.sig === signature ? directions.legs : null;
   const trafficAware = useTraffic && directionsLegs != null;

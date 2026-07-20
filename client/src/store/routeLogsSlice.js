@@ -140,6 +140,49 @@ const routeLogsSlice = (set, get) => ({
 
   /** Convenience wrapper for a single log resolution. */
   resolveRouteLog: async ({ logId, outcome }) => get().resolveRouteLogs([{ logId, outcome }]),
+
+  /**
+   * Undoes accept/decline for the given log ids — restores Proposed and reverses
+   * add/remove stop changes on the server.
+   */
+  undoRouteLogs: async (logIds) => {
+    const ids = (logIds || []).filter(Boolean);
+    if (!ids.length) return null;
+    set((s) => {
+      const next = { ...s.routeLogsApproving };
+      ids.forEach((id) => { next[id] = true; });
+      return { routeLogsApproving: next };
+    });
+    try {
+      const outcomes = {};
+      get().routeLogs.forEach((l) => {
+        if (ids.includes(l.Id) && l._outcome) outcomes[l.Id] = l._outcome;
+      });
+      const res = await routingApi.undoRouteLogs({ logIds: ids, outcomes });
+      set((s) => ({
+        routeLogs: s.routeLogs.map((l) => {
+          if (!ids.includes(l.Id)) return l;
+          const { _outcome, ...rest } = l;
+          return {
+            ...rest,
+            Status__c: 'Proposed',
+            Accepted_By__c: null,
+            Accepted_Date__c: null,
+          };
+        }),
+      }));
+      if (res?.undidAdd?.length || res?.undidRemove?.length) get().refreshRoutes?.();
+      return res;
+    } finally {
+      set((s) => {
+        const next = { ...s.routeLogsApproving };
+        ids.forEach((id) => { next[id] = false; });
+        return { routeLogsApproving: next };
+      });
+    }
+  },
+
+  undoRouteLog: async (logId) => get().undoRouteLogs([logId]),
 });
 
 export default routeLogsSlice;

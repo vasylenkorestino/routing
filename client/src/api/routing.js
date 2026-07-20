@@ -59,6 +59,7 @@ export const enhanceRouteAsync = (body) => client.post('/enhance-route/async', b
 export const suggestTicketCandidates = (body) => client.post('/enhance-route/ticket-candidates', body).then((r) => r.data);
 export const getAIJob = (id) => client.get(`/ai-jobs/${id}`).then((r) => r.data);
 export const approveRouteLogs = (body) => client.post('/enhance-route/approve', body).then((r) => r.data);
+export const undoRouteLogs = (body) => client.post('/enhance-route/undo', body).then((r) => r.data);
 export const getRouteLogs = (googleRouteId) => client.get(`/routing/route-logs/${googleRouteId}`).then((r) => r.data);
 export const getRouteLogComments = (routeLogId) => client.get(`/routing/route-log-comments/${routeLogId}`).then((r) => r.data);
 export const addRouteLogComment = (routeLogId, body) => client.post('/routing/route-log-comments', { routeLogId, body }).then((r) => r.data);

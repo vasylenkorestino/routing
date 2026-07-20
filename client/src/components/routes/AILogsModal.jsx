@@ -37,6 +37,7 @@ const fmtDate = (d) => {
  */
 export default function AILogsModal({ googleRouteId, routeName, variant = 'embedded', onTogglePop }) {
   const resolveRouteLogs = useStore((s) => s.resolveRouteLogs);
+  const undoRouteLog = useStore((s) => s.undoRouteLog);
   const fetchRouteLogs = useStore((s) => s.fetchRouteLogs);
   const logs = useStore((s) => s.routeLogs);
   const loading = useStore((s) => s.routeLogsLoading);
@@ -203,6 +204,16 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     applyResolutions([{ logId: log.Id, outcome }]);
   };
 
+  /** Restores a resolved log to Proposed so the manager can choose again. */
+  const undoOne = useCallback(async (log) => {
+    try {
+      await undoRouteLog(log.Id);
+      toast.success('Decision undone');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  }, [undoRouteLog]);
+
   /**
    * Bulk approve/decline using the same per-flag semantics as each card
    * (e.g. REMOVE + Approve → remove stop; REMOVE + Decline → keep stop).
@@ -343,6 +354,7 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
                 onToggleSelect={() => toggleSelect(log.Id)}
                 onDecide={(decision) => decideOne(log, decision)}
                 onResolve={(outcome) => applyResolutions([{ logId: log.Id, outcome }])}
+                onUndo={() => undoOne(log)}
                 onToggleComments={() => toggleComments(log.Id)}
                 onOpen={() => openLog(log)}
                 onDetailTab={setDetailTab}
@@ -415,7 +427,7 @@ const RESOLUTION_OPTIONS = {
   ignore: { o: 'ignore', label: 'Ignore', cls: 'text-txt-secondary border-border hover:bg-bg' },
 };
 
-function LogCard({ log, inRoute, selected, mapFocused, approving, commentsOpen, detailOpen, detailTab, onToggleSelect, onDecide, onResolve, onToggleComments, onOpen, onDetailTab }) {
+function LogCard({ log, inRoute, selected, mapFocused, approving, commentsOpen, detailOpen, detailTab, onToggleSelect, onDecide, onResolve, onUndo, onToggleComments, onOpen, onDetailTab }) {
   const meta = FLAG_META[log.flag] || FLAG_META.FLAG;
   const isPending = log.Status__c === 'Proposed';
   const needsResolution = NEEDS_RESOLUTION.has(log.flag);
@@ -486,6 +498,16 @@ function LogCard({ log, inRoute, selected, mapFocused, approving, commentsOpen, 
                 Decline
               </button>
             </>
+          )}
+          {!isPending && (
+            <button
+              className="h-6 px-2 text-[10px] font-medium rounded-md bg-surface text-primary border border-primary/30 hover:bg-primary/10 transition disabled:opacity-50"
+              onClick={onUndo}
+              disabled={approving}
+              title="Undo decision and return to Proposed"
+            >
+              {approving ? '…' : 'Undo'}
+            </button>
           )}
         </div>
       </div>
