@@ -1,7 +1,7 @@
 /**
- * Shared route geometry helpers used by the map layers (RouteLayer,
- * RouteTimelineMapLayer): stop/service-location coordinates, decoded
- * polyline paths, and leg-midpoint lookup for on-polyline labels.
+ * Shared route geometry helpers used by map layers (RouteLayer):
+ * stop/service-location coordinates, decoded polyline paths, and
+ * leg-midpoint lookup.
  */
 
 import { decodeRoutePolyline, isValidCoord } from './routePolyline';

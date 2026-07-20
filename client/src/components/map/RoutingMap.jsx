@@ -3,7 +3,6 @@ import { GoogleMap, useLoadScript, Marker, InfoWindow } from '@react-google-maps
 import useStore from '../../store';
 import { decodeRoutePolyline, isValidCoord } from '../../utils/routePolyline';
 import RouteLayer, { CompareRouteLayer } from './RouteLayer';
-import RouteTimelineMapLayer from './RouteTimelineMapLayer';
 import TicketLayer from './TicketLayer';
 import RouteLogLayer from './RouteLogLayer';
 import ShapeLayer from './ShapeLayer';
@@ -126,7 +125,6 @@ export default function RoutingMap() {
       }}
     >
       {layers.routes.visible && <RouteLayer />}
-      {layers.routes.visible && !compareMode && <RouteTimelineMapLayer />}
       <CompareRouteLayer />
       {layers.tickets.visible && <TicketLayer tickets={layers.tickets.data} />}
       {routeId && !compareMode && <RouteLogLayer />}

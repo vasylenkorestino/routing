@@ -230,17 +230,9 @@ const routingSlice = (set, get) => ({
       // while this refresh was in flight is never clobbered by a stale snapshot.
       const routeId = get().routeId;
 
-      if (routeId) {
-        const updated = routes.find((r) => (r.Id ?? r.id) === routeId) ?? null;
-        if (updated) {
-          // Refresh only the route object (fresh stops/polyline); keep routeId so
-          // the header dropdown and map centering stay on the current selection.
-          set({ route: updated });
-          return;
-        }
-      }
-
-      // Only adopt a newly appeared route when the caller explicitly created one.
+      // Prefer adopting a route the caller just created — must run BEFORE the
+      // "keep current selection" early return, otherwise Inherit-from-Template
+      // leaves the old route open while the new one only appears on the map.
       if (selectNewRoute || expectedNewIds) {
         const oldIds = new Set(oldRoutes.map((r) => r.Id ?? r.id));
         const newRoute = expectedNewIds
@@ -248,6 +240,16 @@ const routingSlice = (set, get) => ({
           : routes.find((r) => !oldIds.has(r.Id ?? r.id));
         if (newRoute) {
           get().selectRoute(newRoute.Id ?? newRoute.id);
+          return;
+        }
+      }
+
+      if (routeId) {
+        const updated = routes.find((r) => (r.Id ?? r.id) === routeId) ?? null;
+        if (updated) {
+          // Refresh only the route object (fresh stops/polyline); keep routeId so
+          // the header dropdown and map centering stay on the current selection.
+          set({ route: updated });
           return;
         }
       }
@@ -473,9 +475,9 @@ function applyGoogleRoutePatch(set, get, event, record) {
   set(patch);
   if (get().setLayerData) get().setLayerData('routes', colored);
 
-  // A route created elsewhere must not grab focus or the map: land it hidden
-  // and let the user opt in from the Layers panel. A quiet toast signals it.
-  if (isNew) {
+  // A route created elsewhere must not grab focus: land it hidden unless the
+  // user already selected it (e.g. Inherit-from-Template just opened it).
+  if (isNew && get().routeId !== id) {
     const hidden = { ...(get().hiddenRouteIds || {}) };
     hidden[id] = true;
     set({ hiddenRouteIds: hidden });

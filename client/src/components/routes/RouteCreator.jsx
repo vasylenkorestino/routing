@@ -5,14 +5,24 @@ import { OverlaySpinner } from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 
-/** Polls refreshRoutes until a new route appears or max attempts reached */
-async function pollForNewRoutes(refreshRoutes, maxAttempts = 12, intervalMs = 3000) {
-  const initialCount = useStore.getState().routes.length;
+/**
+ * Polls refreshRoutes until a newly created route appears and is selected.
+ * Returns true when a route that was not in `priorIds` becomes the selection.
+ */
+async function pollForNewRoutes(refreshRoutes, priorIds, maxAttempts = 12, intervalMs = 2500) {
+  const before = priorIds instanceof Set
+    ? priorIds
+    : new Set((useStore.getState().routes || []).map((r) => r.Id ?? r.id));
+
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, intervalMs));
+    if (i > 0) await new Promise((r) => setTimeout(r, intervalMs));
     await refreshRoutes({ selectNewRoute: true });
-    if (useStore.getState().routes.length > initialCount) return;
+    const selectedId = useStore.getState().routeId;
+    if (selectedId && !before.has(selectedId)) return true;
+    const grew = (useStore.getState().routes || []).some((r) => !before.has(r.Id ?? r.id));
+    if (grew && selectedId && !before.has(selectedId)) return true;
   }
+  return false;
 }
 
 function formatDate(d) {
@@ -122,11 +132,12 @@ export default function RouteCreator() {
   });
 
   // Inherit: close the modal immediately and finish creation + refresh in the
-  // background so the user can keep working; routes appear once they're ready.
+  // background so the user can keep working; the new route is selected once ready.
   const handleInheritInBackground = () => {
     const routeIds = selected.filter((id) => templates.find((t) => t.Id === id && t._type === 'route'));
     const shapeIds = selected.filter((id) => templates.find((t) => t.Id === id && t._type === 'shape'));
     const selDate = date;
+    const priorIds = new Set((useStore.getState().routes || []).map((r) => r.Id ?? r.id));
 
     closeModal('isNew');
     toast.success('Route creation started in the background…');
@@ -142,11 +153,10 @@ export default function RouteCreator() {
         }
         await Promise.all(promises);
 
-        // Shapes generate asynchronously on Salesforce, so poll until they land.
-        if (shapeIds.length > 0) await pollForNewRoutes(refreshRoutes, 12, 3000);
-        else await refreshRoutes({ selectNewRoute: true });
-
-        toast.success('Route created.');
+        // Poll until the new route is in the list and selected (map + right panel).
+        const opened = await pollForNewRoutes(refreshRoutes, priorIds, shapeIds.length > 0 ? 12 : 8, 2500);
+        if (opened) toast.success('Route created and opened.');
+        else toast.success('Route created. Select it from the route list if it is not open yet.');
       } catch (err) {
         toast.error(getErrorMessage(err));
       }
@@ -159,10 +169,12 @@ export default function RouteCreator() {
       return;
     }
     setLoading(true);
+    const priorIds = new Set((useStore.getState().routes || []).map((r) => r.Id ?? r.id));
     try {
       await routingApi.createRoutes({ name: routeName, selectedDate: date, recordTypeName: recType, serviceLocationId: svcLoc });
-      await refreshRoutes({ selectNewRoute: true });
-      toast.success('Done! Route created.');
+      const opened = await pollForNewRoutes(refreshRoutes, priorIds, 8, 2000);
+      if (opened) toast.success('Done! Route created and opened.');
+      else toast.success('Done! Route created.');
       closeModal('isNew');
     } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); }
