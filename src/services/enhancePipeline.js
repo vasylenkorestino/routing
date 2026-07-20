@@ -14,13 +14,13 @@ const TRUCK_CAPACITY_GAL = 1800;
 
 const ANALYZE_STOPS_SYSTEM = `You are an AI route analyst for a UCO collection company. Analyze EXISTING stops only.
 
-Return ONLY valid JSON:
+Use tank fill %, VIP/fixed points, driver notes, and truck capacity (~1800 gal).
+
+CRITICAL: Reply with ONLY a single JSON object. No markdown fences, no preamble, no commentary.
 {
   "summary": "2-3 sentence route overview",
   "existingStops": [{ "accountId", "accountName", "action": "keep"|"remove"|"flag"|"overflow", "confidence": 0-100, "reason": "..." }]
-}
-
-Use tank fill %, VIP/fixed points, driver notes, and truck capacity (~1800 gal).`;
+}`;
 
 const ANALYZE_ADDS_SYSTEM = `You are an AI route analyst for a UCO collection company. Recommend NEARBY accounts to ADD to the route.
 
@@ -34,8 +34,9 @@ Rules:
 - In each reason, cite lastServiceDate, nextDueDate (or effectiveFrequencyDays), and estimated gallons.
 - If Agent Memory rules are provided, follow them unless they conflict with hard due/capacity constraints.
 - Return fewer high-quality adds rather than many weak ones. Empty suggestedAdds is OK.
+- If nearbyAccounts is empty, return {"suggestedAdds":[]}.
 
-Return ONLY valid JSON:
+CRITICAL: Reply with ONLY a single JSON object. No markdown fences, no preamble, no commentary.
 {
   "suggestedAdds": [{ "accountId", "accountName", "action": "add", "confidence": 0-100, "reason": "..." }]
 }`;
@@ -284,39 +285,58 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     logger.warn('Enhance pipeline: memory recall failed', { error: err.message });
   }
 
-  const addsSystem = memoryBlock
-    ? `${ANALYZE_ADDS_SYSTEM}\n\n${memoryBlock}`
-    : ANALYZE_ADDS_SYSTEM;
+  let addsText = '';
+  let suggestedAdds = [];
 
-  const addsResponse = await recorder.wrap(
-    'AI Analysis (adds)',
-    'AI Call',
-    () => client.messages.create({
-      model: config.model,
-      max_tokens: config.maxTokens,
-      system: addsSystem,
-      messages: [{
-        role: 'user',
-        content: JSON.stringify({
-          route: routeHeader,
-          stops: stopsData,
-          nearbyAccounts,
-          remainingCapacityGal,
-          historicalInsights,
-          addCandidateStats,
-        }),
-      }],
-    }),
-    { prompt: ANALYZE_ADDS_SYSTEM, input: { nearby: nearbyAccounts.length, remainingCapacityGal } },
-  );
+  if (!nearbyAccounts.length) {
+    addsText = '{"suggestedAdds":[]}';
+    setStep(jobId, 'find_adds', 'done', '0 candidates (none due)');
+    aiJobs.addFinding(jobId, 'No due ADD candidates — skipped add analysis');
+  } else {
+    const addsSystem = memoryBlock
+      ? `${ANALYZE_ADDS_SYSTEM}\n\n${memoryBlock}\n\nFinal reminder: output ONLY valid JSON, nothing else.`
+      : ANALYZE_ADDS_SYSTEM;
 
-  const addsText = addsResponse.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-  const addsAnalysis = parseJson(addsText);
-  const suggestedAdds = addsAnalysis.suggestedAdds || [];
+    const addsResponse = await recorder.wrap(
+      'AI Analysis (adds)',
+      'AI Call',
+      () => client.messages.create({
+        model: config.model,
+        max_tokens: config.maxTokens,
+        system: addsSystem,
+        messages: [{
+          role: 'user',
+          content: `${JSON.stringify({
+            route: routeHeader,
+            stops: stopsData,
+            nearbyAccounts,
+            remainingCapacityGal,
+            historicalInsights,
+            addCandidateStats,
+          })}\n\nRespond with ONLY the JSON object described in the system prompt.`,
+        }],
+      }),
+      { prompt: ANALYZE_ADDS_SYSTEM, input: { nearby: nearbyAccounts.length, remainingCapacityGal } },
+    );
 
-  setStep(jobId, 'find_adds', 'done', `${suggestedAdds.length} candidates`);
-  aiJobs.mergePartialResults(jobId, { suggestedAdds });
-  aiJobs.addFinding(jobId, `Found ${suggestedAdds.length} add candidates (${remainingCapacityGal} gal remaining capacity)`);
+    addsText = addsResponse.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    try {
+      const addsAnalysis = parseJson(addsText);
+      suggestedAdds = Array.isArray(addsAnalysis.suggestedAdds) ? addsAnalysis.suggestedAdds : [];
+    } catch (err) {
+      // Stops already saved — do not fail the whole job on a chatty ADD reply.
+      logger.error('Enhance pipeline: ADD analysis JSON parse failed', {
+        error: err.message,
+        preview: String(addsText).slice(0, 200),
+      });
+      aiJobs.addFinding(jobId, 'ADD analysis returned non-JSON — skipped add suggestions');
+      suggestedAdds = [];
+    }
+
+    setStep(jobId, 'find_adds', 'done', `${suggestedAdds.length} candidates`);
+    aiJobs.mergePartialResults(jobId, { suggestedAdds });
+    aiJobs.addFinding(jobId, `Found ${suggestedAdds.length} add candidates (${remainingCapacityGal} gal remaining capacity)`);
+  }
 
   // Stage 2: persist add recommendations only (stops already saved above).
   setStep(jobId, 'save_logs', 'running', 'Saving add recommendations…');
@@ -353,9 +373,72 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   return { responsePayload, recorder, aiTexts: { stopsText, addsText }, summary };
 }
 
+/**
+ * Parses model output that should be JSON, tolerating markdown fences and
+ * short prose before/after the object (e.g. "I'll analyze… {…}").
+ */
 function parseJson(text) {
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return JSON.parse(cleaned);
+  const raw = String(text || '').trim();
+  if (!raw) throw new SyntaxError('Empty AI response');
+
+  const withoutFences = raw
+    .replace(/```(?:json)?\s*/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  try {
+    return JSON.parse(withoutFences);
+  } catch {
+    // Fall through — extract first balanced object/array.
+  }
+
+  const extracted = extractFirstJsonValue(withoutFences);
+  if (extracted == null) {
+    throw new SyntaxError(`AI response is not valid JSON: ${withoutFences.slice(0, 80)}…`);
+  }
+  return JSON.parse(extracted);
 }
 
-module.exports = { runEnhancePipeline, ANALYZE_STOPS_SYSTEM, ANALYZE_ADDS_SYSTEM };
+/** Returns the first balanced JSON object/array substring, or null. */
+function extractFirstJsonValue(text) {
+  const startObj = text.indexOf('{');
+  const startArr = text.indexOf('[');
+  let start = -1;
+  let open = '';
+  let close = '';
+  if (startObj >= 0 && (startArr < 0 || startObj < startArr)) {
+    start = startObj;
+    open = '{';
+    close = '}';
+  } else if (startArr >= 0) {
+    start = startArr;
+    open = '[';
+    close = ']';
+  }
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === '\\') escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === open) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+module.exports = { runEnhancePipeline, ANALYZE_STOPS_SYSTEM, ANALYZE_ADDS_SYSTEM, parseJson };
