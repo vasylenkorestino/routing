@@ -81,10 +81,11 @@ async function loadStopAccountShapes(conn, accountIds = []) {
 
 /** Account SELECT fields for due-aware ADD candidates. */
 function candidateSelectClause() {
+  // Tank_Size__c comes from ACCOUNT_DUE_FIELDS — do not list it again.
   return `
     Id, Name, ShippingStreet, ShippingCity, ShippingState,
     MALatitude__c, MALongitude__c, Last_Service_Date__c, DaysInterval__c,
-    Tank_Size__c, Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
+    Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
     Ignore_For_Routing__c, Rotisserie_Collection__c, Shape__c, Shape_Name__c,
     ${ACCOUNT_DUE_FIELDS},
     ${SERVICE_HISTORY_SUBQUERY}
