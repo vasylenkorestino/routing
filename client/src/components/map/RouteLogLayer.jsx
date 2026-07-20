@@ -64,14 +64,8 @@ export default function RouteLogLayer() {
       .filter((l) => l.Status__c === 'Proposed' && logCoords(l))
       .map((l) => decorateLog(l))
       .filter(Boolean)
-      .filter((l) => {
-        // Accounts already on the route: only REMOVE is useful on the map
-        // (ADD/KEEP/FLAG for an existing stop just stacks on the stop marker).
-        const onRoute = !!l.Account__c && routeAccountIds.has(l.Account__c);
-        if (onRoute && l.flag !== 'REMOVE') return false;
-        return flagVisible[l.flag] !== false;
-      });
-  }, [routeId, routeLogsRouteId, routeLogs, flagVisible, routeAccountIds]);
+      .filter((l) => flagVisible[l.flag] !== false);
+  }, [routeId, routeLogsRouteId, routeLogs, flagVisible]);
 
   // Keep InfoWindow open after resolve so Undo is available (resolved logs leave `pending`).
   const popup = useMemo(() => {
@@ -127,7 +121,7 @@ export default function RouteLogLayer() {
             icon={routeLogMarkerIcon(log.flag, { selected, focused })}
             opacity={hasSelection && !selected && !focused ? 0.45 : 1}
             title={`${FLAG_META[log.flag]?.label || log.flag}: ${log.Account__r?.Name || log.Name}${selected ? ' (selected)' : ''}`}
-            zIndex={focused ? 220 : selected ? 180 : 120}
+            zIndex={focused ? 500 : selected ? 400 : 300}
           />
         );
       })}
