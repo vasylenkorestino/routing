@@ -92,6 +92,14 @@ const routingSlice = (set, get) => ({
   trafficRefreshNonce: 0,
   refreshTraffic: () => set((s) => ({ trafficRefreshNonce: s.trafficRefreshNonce + 1 })),
 
+  /**
+   * True only while THIS client is creating/splitting/combining a route.
+   * Gates selectNewRoute so another user's create (SSE) never steals focus.
+   */
+  expectingLocalNewRoutes: false,
+  beginLocalRouteCreate: () => set({ expectingLocalNewRoutes: true }),
+  endLocalRouteCreate: () => set({ expectingLocalNewRoutes: false }),
+
   toggleRouteAiSelected: (routeId) =>
     set((s) => {
       const next = { ...s.aiSelectedRouteIds };
@@ -200,14 +208,18 @@ const routingSlice = (set, get) => ({
    * still exists.
    *
    * By default it does NOT change the user's selection — a route that newly
-   * appeared (e.g. created by another user in the meantime) must not hijack the
-   * current view. Callers that just created a route can opt in to adopting it:
-   *   - `selectNewRoute: true` — select the first route not present before.
-   *   - `expectedNewIds: [...]` — select the first matching id that appeared.
+   * appeared (e.g. created by another user) must not hijack the current view.
+   * Callers that just created a route can opt in:
+   *   - `expectedNewIds: [...]` — select the first matching id (preferred).
+   *   - `selectNewRoute: true` — select the first brand-new route, but ONLY while
+   *     `expectingLocalNewRoutes` is set (this client's create/split/combine).
    */
   refreshRoutes: async (options = {}) => {
     const { selectNewRoute = false, expectedNewIds = null } = options;
     const { serviceDate, recordType, serviceLocation, routes: oldRoutes } = get();
+    const expectIds = Array.isArray(expectedNewIds) ? expectedNewIds.filter(Boolean) : [];
+    const canAdoptNew = expectIds.length > 0
+      || (selectNewRoute && get().expectingLocalNewRoutes);
     set({ isLoading: true });
     try {
       const params = {
@@ -230,16 +242,16 @@ const routingSlice = (set, get) => ({
       // while this refresh was in flight is never clobbered by a stale snapshot.
       const routeId = get().routeId;
 
-      // Prefer adopting a route the caller just created — must run BEFORE the
-      // "keep current selection" early return, otherwise Inherit-from-Template
-      // leaves the old route open while the new one only appears on the map.
-      if (selectNewRoute || expectedNewIds) {
+      // Adopt a route THIS client just created — before the "keep current"
+      // early return. Never adopt routes created by other users (SSE / refresh).
+      if (canAdoptNew) {
         const oldIds = new Set(oldRoutes.map((r) => r.Id ?? r.id));
-        const newRoute = expectedNewIds
-          ? routes.find((r) => expectedNewIds.includes(r.Id ?? r.id))
+        const newRoute = expectIds.length
+          ? routes.find((r) => expectIds.includes(r.Id ?? r.id))
           : routes.find((r) => !oldIds.has(r.Id ?? r.id));
         if (newRoute) {
           get().selectRoute(newRoute.Id ?? newRoute.id);
+          set({ expectingLocalNewRoutes: false });
           return;
         }
       }
@@ -475,8 +487,9 @@ function applyGoogleRoutePatch(set, get, event, record) {
   set(patch);
   if (get().setLayerData) get().setLayerData('routes', colored);
 
-  // A route created elsewhere must not grab focus: land it hidden unless the
-  // user already selected it (e.g. Inherit-from-Template just opened it).
+  // Routes created by others (or arriving via SSE before local select): keep
+  // them off the map and never change routeId / map center. Local create flows
+  // call selectRoute explicitly after refreshRoutes adopts their new ids.
   if (isNew && get().routeId !== id) {
     const hidden = { ...(get().hiddenRouteIds || {}) };
     hidden[id] = true;

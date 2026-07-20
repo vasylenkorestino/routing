@@ -35,15 +35,22 @@ export default function RouteSplitter() {
     setter(new Set(set.has(id) ? [...set].filter((x) => x !== id) : [...set, id]));
   };
 
+  const beginLocalRouteCreate = useStore((st) => st.beginLocalRouteCreate);
+  const endLocalRouteCreate = useStore((st) => st.endLocalRouteCreate);
+
   const handleSplit = async () => {
     if (!movedIds.size || !newName.trim()) return;
     setLoading(true);
+    beginLocalRouteCreate();
     try {
       await routingApi.splitRoute({ googleRoute: { Id: route.Id }, accountIds: [...movedIds], recordTypeName: route.RecordType?.Name });
       await refreshRoutes({ selectNewRoute: true });
       closeModal('isSplit');
     } catch (err) { toast.error(getErrorMessage(err)); }
-    finally { setLoading(false); }
+    finally {
+      endLocalRouteCreate();
+      setLoading(false);
+    }
   };
 
   if (!isSplit) return null;

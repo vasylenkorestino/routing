@@ -5,22 +5,36 @@ import { OverlaySpinner } from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 
+/** Pulls Google_Route__c Ids from create-routes / similar API payloads. */
+function extractCreatedRouteIds(payload) {
+  if (!payload) return [];
+  const list = Array.isArray(payload)
+    ? payload
+    : (Array.isArray(payload.records) ? payload.records
+      : (Array.isArray(payload.googleRoutes) ? payload.googleRoutes : [payload]));
+  return list.map((r) => r?.Id ?? r?.id).filter(Boolean);
+}
+
 /**
- * Polls refreshRoutes until a newly created route appears and is selected.
- * Returns true when a route that was not in `priorIds` becomes the selection.
+ * Polls until a route THIS client just created is selected.
+ * Prefers `expectedNewIds` when the create API returned them.
  */
-async function pollForNewRoutes(refreshRoutes, priorIds, maxAttempts = 12, intervalMs = 2500) {
+async function pollForNewRoutes(refreshRoutes, { priorIds, expectedNewIds = [], maxAttempts = 12, intervalMs = 2500 } = {}) {
   const before = priorIds instanceof Set
     ? priorIds
     : new Set((useStore.getState().routes || []).map((r) => r.Id ?? r.id));
+  const expectIds = (expectedNewIds || []).filter(Boolean);
 
   for (let i = 0; i < maxAttempts; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, intervalMs));
-    await refreshRoutes({ selectNewRoute: true });
+    await refreshRoutes(
+      expectIds.length
+        ? { expectedNewIds: expectIds }
+        : { selectNewRoute: true },
+    );
     const selectedId = useStore.getState().routeId;
-    if (selectedId && !before.has(selectedId)) return true;
-    const grew = (useStore.getState().routes || []).some((r) => !before.has(r.Id ?? r.id));
-    if (grew && selectedId && !before.has(selectedId)) return true;
+    if (!selectedId) continue;
+    if (expectIds.length ? expectIds.includes(selectedId) : !before.has(selectedId)) return true;
   }
   return false;
 }
@@ -57,6 +71,8 @@ export default function RouteCreator() {
   const serviceLocation = useStore((st) => st.serviceLocation);
   const serviceLocations = useStore((st) => st.serviceLocations);
   const refreshRoutes = useStore((st) => st.refreshRoutes);
+  const beginLocalRouteCreate = useStore((st) => st.beginLocalRouteCreate);
+  const endLocalRouteCreate = useStore((st) => st.endLocalRouteCreate);
 
   const [tab, setTab] = useState('inherit');
   const [templates, setTemplates] = useState([]);
@@ -141,24 +157,33 @@ export default function RouteCreator() {
 
     closeModal('isNew');
     toast.success('Route creation started in the background…');
+    beginLocalRouteCreate();
 
     (async () => {
       try {
-        const promises = [];
-        if (routeIds.length > 0) {
-          promises.push(routingApi.createRoutes({ selectedRowIds: routeIds, selectedDate: selDate }));
-        }
-        if (shapeIds.length > 0) {
-          promises.push(routingApi.generateRouteByShape({ shapeIds, serviceDate: selDate }));
-        }
-        await Promise.all(promises);
+        const results = await Promise.all([
+          ...(routeIds.length
+            ? [routingApi.createRoutes({ selectedRowIds: routeIds, selectedDate: selDate })]
+            : []),
+          ...(shapeIds.length
+            ? [routingApi.generateRouteByShape({ shapeIds, serviceDate: selDate })]
+            : []),
+        ]);
+        const expectedNewIds = results.flatMap(extractCreatedRouteIds);
 
-        // Poll until the new route is in the list and selected (map + right panel).
-        const opened = await pollForNewRoutes(refreshRoutes, priorIds, shapeIds.length > 0 ? 12 : 8, 2500);
+        // Poll until THIS client's new route is selected (map + right panel).
+        const opened = await pollForNewRoutes(refreshRoutes, {
+          priorIds,
+          expectedNewIds,
+          maxAttempts: shapeIds.length > 0 ? 12 : 8,
+          intervalMs: 2500,
+        });
         if (opened) toast.success('Route created and opened.');
         else toast.success('Route created. Select it from the route list if it is not open yet.');
       } catch (err) {
         toast.error(getErrorMessage(err));
+      } finally {
+        endLocalRouteCreate();
       }
     })();
   };
@@ -170,14 +195,25 @@ export default function RouteCreator() {
     }
     setLoading(true);
     const priorIds = new Set((useStore.getState().routes || []).map((r) => r.Id ?? r.id));
+    beginLocalRouteCreate();
     try {
-      await routingApi.createRoutes({ name: routeName, selectedDate: date, recordTypeName: recType, serviceLocationId: svcLoc });
-      const opened = await pollForNewRoutes(refreshRoutes, priorIds, 8, 2000);
+      const created = await routingApi.createRoutes({
+        name: routeName, selectedDate: date, recordTypeName: recType, serviceLocationId: svcLoc,
+      });
+      const opened = await pollForNewRoutes(refreshRoutes, {
+        priorIds,
+        expectedNewIds: extractCreatedRouteIds(created),
+        maxAttempts: 8,
+        intervalMs: 2000,
+      });
       if (opened) toast.success('Done! Route created and opened.');
       else toast.success('Done! Route created.');
       closeModal('isNew');
     } catch (err) { toast.error(getErrorMessage(err)); }
-    finally { setLoading(false); }
+    finally {
+      endLocalRouteCreate();
+      setLoading(false);
+    }
   };
 
   if (!isNew) return null;

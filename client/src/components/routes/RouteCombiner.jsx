@@ -13,6 +13,8 @@ export default function RouteCombiner() {
   const route = useStore((st) => st.route);
   const serviceLocations = useStore((st) => st.serviceLocations);
   const refreshRoutes = useStore((st) => st.refreshRoutes);
+  const beginLocalRouteCreate = useStore((st) => st.beginLocalRouteCreate);
+  const endLocalRouteCreate = useStore((st) => st.endLocalRouteCreate);
 
   const [routeA, setRouteA] = useState(route?.Id || '');
   const [routeB, setRouteB] = useState('');
@@ -24,6 +26,7 @@ export default function RouteCombiner() {
   const handleCombine = async () => {
     if (!routeA || !routeB || !newName.trim()) return;
     setLoading(true);
+    beginLocalRouteCreate();
     try {
       await routingApi.combineRoutes({
         firstRouteId: routeA, secondRouteId: routeB, newRouteName: newName,
@@ -33,7 +36,10 @@ export default function RouteCombiner() {
       await refreshRoutes({ selectNewRoute: true });
       closeModal('isCombine');
     } catch (err) { toast.error(getErrorMessage(err)); }
-    finally { setLoading(false); }
+    finally {
+      endLocalRouteCreate();
+      setLoading(false);
+    }
   };
 
   if (!isCombine) return null;
