@@ -113,12 +113,26 @@ function initChatSteps(jobId) {
   }
 }
 
+/** Wraps the rolling session summary in a prompt block (empty when no summary). */
+function buildSummaryBlock(summary) {
+  if (!summary) return '';
+  return [
+    '--- CONVERSATION SO FAR (summary of earlier turns in this session) ---',
+    summary,
+    '--- END CONVERSATION SUMMARY ---',
+  ].join('\n');
+}
+
 /** Runs chat with optional exploratory prefetch or full orchestrator. */
 async function runChatOrchestrator({ message, recordType, context, sessionId, jobId, recorder, onProgress, executionContext }) {
   const intent = classifyChatIntent(message, context);
-  const memoryBlock = await buildMemoryContext({ context, recordType });
-  const { staticPrompt, dynamicPrompt } = composeSystemPrompt('chat', { memoryBlock });
-  const priorMessages = sessionId ? sessionStore.getMessages(sessionId) : [];
+  const [memoryBlock, sessionSummary, priorMessages] = await Promise.all([
+    buildMemoryContext({ context, recordType }),
+    sessionId ? sessionStore.getSummary(sessionId) : '',
+    sessionId ? sessionStore.getMessages(sessionId) : [],
+  ]);
+  const dynamicBlock = [memoryBlock, buildSummaryBlock(sessionSummary)].filter(Boolean).join('\n\n');
+  const { staticPrompt, dynamicPrompt } = composeSystemPrompt('chat', { memoryBlock: dynamicBlock });
   const contextPrompt = buildContextPrompt(context, recordType, intent);
   const fullUserMessage = message + contextPrompt;
   const modeConfig = TASK_MODES[intent.mode] || TASK_MODES.full;
@@ -164,7 +178,7 @@ async function runChatJob(jobId, body) {
   aiJobs.updateProgress(jobId, { step: 'understand', label: 'Understanding your request…', percent: 5 });
   publishJobProgress(jobId);
 
-  if (sessionId) sessionStore.append(sessionId, { role: 'user', content: message });
+  if (sessionId) await sessionStore.append(sessionId, { role: 'user', content: message });
 
   aiJobs.upsertStep(jobId, { id: 'understand', label: 'Understanding your request', status: 'done' });
   aiJobs.upsertStep(jobId, { id: 'process', label: 'Processing', status: 'running' });
@@ -201,7 +215,7 @@ async function runChatJob(jobId, body) {
   aiJobs.upsertStep(jobId, { id: 'process', label: 'Processing', status: 'done' });
   aiJobs.upsertStep(jobId, { id: 'respond', label: 'Preparing response', status: 'done' });
   aiJobs.setMessage(jobId, result.message);
-  if (sessionId) sessionStore.append(sessionId, { role: 'assistant', content: result.message });
+  if (sessionId) await sessionStore.append(sessionId, { role: 'assistant', content: result.message }, { recordType });
   if (Array.isArray(result.createdRoutes) && result.createdRoutes.length > 0) {
     aiJobs.mergePartialResults(jobId, { createdRoutes: result.createdRoutes });
   }
@@ -223,7 +237,7 @@ router.post('/', async (req, res, next) => {
 
     logger.info('Chat request', { message: message.substring(0, 100), hasContext: !!context });
 
-    if (sessionId) sessionStore.append(sessionId, { role: 'user', content: message });
+    if (sessionId) await sessionStore.append(sessionId, { role: 'user', content: message });
 
     const result = await runChatOrchestrator({
       message,
@@ -234,7 +248,7 @@ router.post('/', async (req, res, next) => {
       executionContext: { owner: aiJobs.resolveOwner(req) },
     });
 
-    if (sessionId) sessionStore.append(sessionId, { role: 'assistant', content: result.message });
+    if (sessionId) await sessionStore.append(sessionId, { role: 'assistant', content: result.message }, { recordType });
 
     logAction({
       action: 'Chat',

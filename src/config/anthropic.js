@@ -1,6 +1,7 @@
 module.exports = {
   apiKey: process.env.ANTHROPIC_API_KEY,
   model: process.env.AGENT_MODEL || 'claude-sonnet-4-6',
+  summaryModel: process.env.AGENT_SUMMARY_MODEL || 'claude-haiku-4-5',
   maxTokens: 8192,
   agentId: process.env.AGENT_ID || 'routepilot-v1',
   memory: {

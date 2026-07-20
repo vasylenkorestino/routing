@@ -175,6 +175,37 @@ function logCacheUsage(iterations, usage) {
 }
 
 /**
+ * Folds trimmed chat turns into a rolling conversation summary using a cheap model.
+ * Returns the updated summary text, or '' when there is nothing to summarize.
+ */
+async function summarizeConversation(previousSummary, messages) {
+  if (!messages?.length) return previousSummary || '';
+  const client = new Anthropic({ apiKey: config.apiKey });
+
+  const turns = messages
+    .map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
+    .join('\n');
+
+  const response = await createMessageWithRetry(client, {
+    model: config.summaryModel || config.model,
+    max_tokens: 1024,
+    system: 'You maintain a rolling summary of a conversation between a routing manager and an AI routing assistant. '
+      + 'Merge the new turns into the previous summary. Keep decisions, route/account names and IDs, constraints, and open questions. '
+      + 'Reply with the updated summary only — plain text, at most 300 words.',
+    messages: [{
+      role: 'user',
+      content: `Previous summary:\n${previousSummary || '(none)'}\n\nNew conversation turns:\n${turns}`,
+    }],
+  });
+
+  return response.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+}
+
+/**
  * Creates an orchestrator that runs a multi-turn tool-use loop with Claude.
  * Options: recorder, onProgress, staticPrompt, dynamicPrompt, systemPrompt (legacy string),
  * priorMessages, toolNames, maxIterations
@@ -349,6 +380,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
 
 module.exports = {
   createOrchestrator,
+  summarizeConversation,
   buildSystemBlocks,
   buildCachedTools,
   trimToolResult,
