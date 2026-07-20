@@ -6,11 +6,11 @@ const { optimizeGoogleRoute } = require('../services/sfRoutingApi');
 const { logErrorToSalesforce } = require('../services/errorLogger');
 const { logAction } = require('../services/actionLogger');
 const { createRecorder } = require('../services/stepRecorder');
-const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 const aiJobs = require('../services/aiJobs');
 const { publishJobProgress } = require('../services/aiJobPublisher');
 const { runEnhancePipeline, ANALYZE_STOPS_SYSTEM } = require('../services/enhancePipeline');
 const { saveEnhanceLogs } = require('../services/saveEnhanceLogs');
+const { loadEnhanceAddCandidates } = require('../services/enhanceAddCandidates');
 const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 
@@ -19,11 +19,11 @@ const ANALYZE_SYSTEM = `You are an AI route analyst for a UCO (Used Cooking Oil)
 You will receive a JSON object with:
 - route: route header info
 - stops: current stops on the route (with account details, service history, tank info)
-- nearbyAccounts: accounts NOT currently on this route but geographically nearby, with their service data
+- nearbyAccounts: PRE-FILTERED due accounts (service-due engine) in the route/neighbor shapes — not already on this route
 
 YOUR TASKS:
 1. Analyze each EXISTING stop — recommend keep/remove/flag
-2. Analyze NEARBY accounts — recommend which ones should be ADDED to this route
+2. Analyze nearbyAccounts — recommend which due accounts should be ADDED
 
 For each item in your output, provide:
 - accountId: the Account Id
@@ -39,14 +39,13 @@ DECISION FACTORS:
 - Tank fill % = (GPD × days_since_last_service) / tank_capacity. ≥80% = must service. <30% = skip.
 - VIP/No-fail = always keep
 - Fixed points = always keep
-- Overdue accounts (days since service > interval) nearby = strong add candidates
-- Same plaza or street as existing stop = add if even moderately full
+- nearbyAccounts are already due — prefer higher daysOverdue / estimatedGallonsAtDate; cite lastServiceDate and nextDueDate in ADD reasons
+- Prefer inRouteShape then inNeighborShape; same plaza/street as existing stop strengthens an add
 - Open tickets = higher priority to add
 - Consider truck capacity (~1800 gal) — don't exceed with additions
 - Geographic fit — only suggest adds that are along the route path, not major detours
-- routeNotes: routing-specific comments about the account — may contain scheduling or access info
-- specialInstructions: account-level instructions (e.g. "call before arrival", "skip if raining") — respect these constraints
-- driverNotes: driver observations about this stop — may flag issues like "closed", "inaccessible", etc.
+- Never recommend recently serviced / not-due accounts (already excluded from nearbyAccounts)
+- routeNotes / specialInstructions / driverNotes — respect access and scheduling constraints
 
 Return ONLY valid JSON with this structure:
 {
@@ -68,7 +67,7 @@ router.post('/', async (req, res, next) => {
 
     const routeQuery = `
       SELECT Id, Name, Service_Date__c, DriverName__c, Total_Distance__c, Total_Time__c,
-             Service_Location_Start__c, Service_Location_End__c
+             Service_Location_Start__c, Service_Location_End__c, Shape__c
       FROM Google_Route__c WHERE Id = '${googleRouteId}'
     `;
     const route = await recorder.wrap('Load Route', 'SOQL', () => conn.query(routeQuery), {
@@ -137,57 +136,20 @@ router.post('/', async (req, res, next) => {
       };
     });
 
-    // Find nearby accounts not already on this route
+    // Due-aware ADD candidates (shape + neighbors, serviceDue hard filter).
     let nearbyAccounts = [];
-    const nearbyResultRaw = {}; // accountId -> raw SF record (kept server-side, not sent to AI)
-    const lats = stopsData.map((s) => s.lat).filter(Boolean);
-    const lngs = stopsData.map((s) => s.lng).filter(Boolean);
-    if (lats.length > 0 && lngs.length > 0) {
-      const PAD = 0.15; // ~10 miles bounding box padding
-      const minLat = Math.min(...lats) - PAD;
-      const maxLat = Math.max(...lats) + PAD;
-      const minLng = Math.min(...lngs) - PAD;
-      const maxLng = Math.max(...lngs) + PAD;
-      const excludeIds = accountIds.map((id) => `'${id}'`).join(',');
-
-      try {
-        const nearbyQuery = `
-          SELECT Id, Name, ShippingStreet, ShippingCity, ShippingState,
-                 MALatitude__c, MALongitude__c, Last_Service_Date__c, DaysInterval__c,
-                 Tank_Size__c, Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
-                 Ignore_For_Routing__c, Rotisserie_Collection__c,
-                 (SELECT Id, Qty_Gallons__c, Service_Date__c FROM Services__r ORDER BY CreatedDate DESC LIMIT 3)
-          FROM Account
-          WHERE MALatitude__c >= ${minLat} AND MALatitude__c <= ${maxLat}
-            AND MALongitude__c >= ${minLng} AND MALongitude__c <= ${maxLng}
-            AND Id NOT IN (${excludeIds})
-            AND ${accountRoutingFilterClause()}
-            AND MALatitude__c != null AND MALongitude__c != null
-          LIMIT 50
-        `;
-        const nearbyResult = await recorder.wrap('Find Nearby Accounts', 'SOQL', () => conn.query(nearbyQuery), {
-          input: nearbyQuery,
-        });
-        for (const a of nearbyResult.records || []) nearbyResultRaw[a.Id] = a;
-        nearbyAccounts = (nearbyResult.records || []).map((a) => ({
-          accountId: a.Id,
-          accountName: a.Name,
-          lat: a.MALatitude__c,
-          lng: a.MALongitude__c,
-          lastServiceDate: a.Last_Service_Date__c,
-          interval: a.DaysInterval__c,
-          tankSize: a.Tank_Size__c,
-          secondContainer: a.Second_Container__c,
-          priorityTier: a.Priority_Tier__c,
-          routeNotes: a.Route_Notes__c,
-          specialInstructions: a.Notes__c,
-          recentServices: (a.Services__r?.records || []).map((sv) => ({ gallons: sv.Qty_Gallons__c, date: sv.Service_Date__c })),
-        }));
-        logger.info(`AI Enhance: found ${nearbyAccounts.length} nearby accounts`);
-      } catch (err) {
-        logger.error('AI Enhance: nearby accounts query failed', { error: err.message });
-        // recorder.wrap already captured the error step
-      }
+    let nearbyResultRaw = {};
+    try {
+      const addResult = await loadEnhanceAddCandidates(conn, {
+        googleRoute: gRoute,
+        stops: stops.records,
+        recorder,
+      });
+      nearbyAccounts = addResult.candidates;
+      nearbyResultRaw = addResult.rawById;
+      logger.info('AI Enhance: due ADD candidates', addResult.stats);
+    } catch (err) {
+      logger.error('AI Enhance: ADD candidate load failed', { error: err.message });
     }
 
     const payload = {

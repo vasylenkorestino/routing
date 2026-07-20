@@ -2,11 +2,12 @@ const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../config/anthropic');
 const { getConnection } = require('./salesforce');
 const { createRecorder } = require('./stepRecorder');
-const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 const aiJobs = require('./aiJobs');
 const { publishJobProgress, progress } = require('./aiJobPublisher');
 const { analyzeRouteCompare } = require('../modules/routeCompare');
 const { saveEnhanceLogs } = require('./saveEnhanceLogs');
+const { loadEnhanceAddCandidates } = require('./enhanceAddCandidates');
+const { buildMemoryContext } = require('../agent/memory/recall');
 const logger = require('../utils/logger');
 
 const TRUCK_CAPACITY_GAL = 1800;
@@ -21,9 +22,18 @@ Return ONLY valid JSON:
 
 Use tank fill %, VIP/fixed points, driver notes, and truck capacity (~1800 gal).`;
 
-const ANALYZE_ADDS_SYSTEM = `You are an AI route analyst for a UCO collection company. Recommend NEARBY accounts to ADD.
+const ANALYZE_ADDS_SYSTEM = `You are an AI route analyst for a UCO collection company. Recommend NEARBY accounts to ADD to the route.
 
-You receive remainingCapacityGal — do not suggest adds that would exceed it.
+The nearbyAccounts list is PRE-FILTERED: every account is already due for service on the route date (service-due engine). Do NOT suggest accounts outside this list.
+
+Rules:
+- Only recommend from nearbyAccounts. Prefer higher daysOverdue and higher estimatedGallonsAtDate.
+- Prefer inRouteShape, then inNeighborShape; avoid large geographic detours from the current stop path.
+- Respect remainingCapacityGal — do not suggest adds that would exceed truck capacity (~1800 gal).
+- Never recommend recently serviced / not-due accounts (they are already excluded).
+- In each reason, cite lastServiceDate, nextDueDate (or effectiveFrequencyDays), and estimated gallons.
+- If Agent Memory rules are provided, follow them unless they conflict with hard due/capacity constraints.
+- Return fewer high-quality adds rather than many weak ones. Empty suggestedAdds is OK.
 
 Return ONLY valid JSON:
 {
@@ -84,7 +94,7 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   setStep(jobId, 'load_route', 'running');
   const routeQuery = `
     SELECT Id, Name, Service_Date__c, DriverName__c, Total_Distance__c, Total_Time__c,
-           Service_Location_Start__c, Service_Location_End__c
+           Service_Location_Start__c, Service_Location_End__c, Shape__c
     FROM Google_Route__c WHERE Id = '${googleRouteId}'
   `;
   const stopsQuery = `
@@ -129,7 +139,8 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   setStep(jobId, 'load_locations', 'running');
   let accounts = [];
   let nearbyAccounts = [];
-  const nearbyResultRaw = {};
+  let nearbyResultRaw = {};
+  let addCandidateStats = null;
 
   const loadAccounts = async () => {
     if (!accountIds.length) return;
@@ -146,48 +157,17 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   };
 
   const loadNearby = async () => {
-    const lats = stops.records.map((s) => s.Latitude__c).filter(Boolean);
-    const lngs = stops.records.map((s) => s.Longitude__c).filter(Boolean);
-    if (!lats.length) return;
-    const PAD = 0.15;
-    const minLat = Math.min(...lats) - PAD;
-    const maxLat = Math.max(...lats) + PAD;
-    const minLng = Math.min(...lngs) - PAD;
-    const maxLng = Math.max(...lngs) + PAD;
-    const excludeIds = accountIds.map((id) => `'${id}'`).join(',');
-    const nearbyQuery = `
-      SELECT Id, Name, ShippingStreet, ShippingCity, ShippingState,
-             MALatitude__c, MALongitude__c, Last_Service_Date__c, DaysInterval__c,
-             Tank_Size__c, Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
-             Ignore_For_Routing__c, Rotisserie_Collection__c,
-             (SELECT Id, Qty_Gallons__c, Service_Date__c FROM Services__r ORDER BY CreatedDate DESC LIMIT 3)
-      FROM Account
-      WHERE MALatitude__c >= ${minLat} AND MALatitude__c <= ${maxLat}
-        AND MALongitude__c >= ${minLng} AND MALongitude__c <= ${maxLng}
-        AND Id NOT IN (${excludeIds})
-        AND ${accountRoutingFilterClause()}
-        AND MALatitude__c != null AND MALongitude__c != null
-      LIMIT 50
-    `;
     try {
-      const nearbyResult = await recorder.wrap('Find Nearby Accounts', 'SOQL', () => conn.query(nearbyQuery), { input: nearbyQuery });
-      for (const a of nearbyResult.records || []) nearbyResultRaw[a.Id] = a;
-      nearbyAccounts = (nearbyResult.records || []).map((a) => ({
-        accountId: a.Id,
-        accountName: a.Name,
-        lat: a.MALatitude__c,
-        lng: a.MALongitude__c,
-        lastServiceDate: a.Last_Service_Date__c,
-        interval: a.DaysInterval__c,
-        tankSize: a.Tank_Size__c,
-        secondContainer: a.Second_Container__c,
-        priorityTier: a.Priority_Tier__c,
-        routeNotes: a.Route_Notes__c,
-        specialInstructions: a.Notes__c,
-        recentServices: (a.Services__r?.records || []).map((sv) => ({ gallons: sv.Qty_Gallons__c, date: sv.Service_Date__c })),
-      }));
+      const result = await loadEnhanceAddCandidates(conn, {
+        googleRoute: gRoute,
+        stops: stops.records,
+        recorder,
+      });
+      nearbyAccounts = result.candidates;
+      nearbyResultRaw = result.rawById;
+      addCandidateStats = result.stats;
     } catch (err) {
-      logger.error('Enhance pipeline: nearby query failed', { error: err.message });
+      logger.error('Enhance pipeline: due-aware ADD candidates failed', { error: err.message });
     }
   };
 
@@ -221,9 +201,15 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     };
   });
 
-  setStep(jobId, 'load_locations', 'done', `${nearbyAccounts.length} nearby accounts`);
-  aiJobs.mergePartialResults(jobId, { nearbyCount: nearbyAccounts.length });
-  aiJobs.addFinding(jobId, `Found ${nearbyAccounts.length} nearby accounts to evaluate`);
+  const dueDetail = addCandidateStats
+    ? `${nearbyAccounts.length} due (of ${addCandidateStats.queried}; ${addCandidateStats.declinedExcluded} declined excluded)`
+    : `${nearbyAccounts.length} due candidates`;
+  setStep(jobId, 'load_locations', 'done', dueDetail);
+  aiJobs.mergePartialResults(jobId, { nearbyCount: nearbyAccounts.length, addCandidateStats });
+  aiJobs.addFinding(jobId, `Found ${nearbyAccounts.length} due ADD candidates to evaluate`);
+  if (addCandidateStats?.declinedExcluded) {
+    aiJobs.addFinding(jobId, `Excluded ${addCandidateStats.declinedExcluded} recently declined ADD accounts`);
+  }
   aiJobs.updateProgress(jobId, { step: 'analyze_stops', label: 'Analyzing current stops…', percent: 40 });
   publishJobProgress(jobId);
 
@@ -285,13 +271,30 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   const remainingCapacityGal = Math.max(0, TRUCK_CAPACITY_GAL - keptGal);
 
   setStep(jobId, 'find_adds', 'running');
+  let memoryBlock = '';
+  try {
+    memoryBlock = await buildMemoryContext({
+      context: {
+        routeId: googleRouteId,
+        stops: stopsData,
+        serviceLocationId: gRoute.Service_Location_Start__c || null,
+      },
+    });
+  } catch (err) {
+    logger.warn('Enhance pipeline: memory recall failed', { error: err.message });
+  }
+
+  const addsSystem = memoryBlock
+    ? `${ANALYZE_ADDS_SYSTEM}\n\n${memoryBlock}`
+    : ANALYZE_ADDS_SYSTEM;
+
   const addsResponse = await recorder.wrap(
     'AI Analysis (adds)',
     'AI Call',
     () => client.messages.create({
       model: config.model,
       max_tokens: config.maxTokens,
-      system: ANALYZE_ADDS_SYSTEM,
+      system: addsSystem,
       messages: [{
         role: 'user',
         content: JSON.stringify({
@@ -300,6 +303,7 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
           nearbyAccounts,
           remainingCapacityGal,
           historicalInsights,
+          addCandidateStats,
         }),
       }],
     }),

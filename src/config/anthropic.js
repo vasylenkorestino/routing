@@ -8,7 +8,7 @@ module.exports = {
     maxRecalledMemories: 20,
     maxActivePerScope: 50,
     unusedArchiveDays: 90,
-    reflectionMinFeedbackEvents: 10,
+    reflectionMinFeedbackEvents: 5,
     reflectionMaxEventsPerRun: 100,
     contradictionConfidencePenalty: 25,
     contradictionDeactivateThreshold: 30,
