@@ -138,8 +138,14 @@ async function queryCandidateAccounts(conn, {
   return res.records || [];
 }
 
+/** True when Reason__c is an AI Enhance ADD recommendation. */
+function isAddReason(reason) {
+  return /^\s*\[ADD\]/i.test(String(reason || ''));
+}
+
 /**
  * Accounts with a Declined [ADD] RouteLog in the lookback window (any route).
+ * Reason__c is Long Text Area — cannot filter in SOQL; filter in memory.
  * @returns {Promise<Set<string>>}
  */
 async function loadRecentlyDeclinedAddAccountIds(conn, accountIds = []) {
@@ -147,33 +153,39 @@ async function loadRecentlyDeclinedAddAccountIds(conn, accountIds = []) {
   if (!ids.length) return new Set();
   const since = daysAgoISO(DECLINED_ADD_LOOKBACK_DAYS);
   const idList = ids.map((id) => `'${escId(id)}'`).join(',');
+
+  const pickDeclinedAdds = (records) => new Set(
+    (records || [])
+      .filter((r) => isAddReason(r.Reason__c))
+      .map((r) => r.Account__c)
+      .filter(Boolean),
+  );
+
   const q = `
-    SELECT Account__c
+    SELECT Account__c, Reason__c
     FROM RouteLog__c
     WHERE Skill__c = 'AI Enhance'
       AND Status__c = 'Declined'
       AND Account__c IN (${idList})
-      AND Reason__c LIKE '[ADD]%'
       AND (Accepted_Date__c >= ${since}T00:00:00.000Z OR CreatedDate >= ${since}T00:00:00.000Z)
     LIMIT 500
   `;
   try {
     const res = await conn.query(q);
-    return new Set((res.records || []).map((r) => r.Account__c).filter(Boolean));
+    return pickDeclinedAdds(res.records);
   } catch {
     // Accepted_Date__c datetime filter can fail in some orgs — retry on CreatedDate only.
     const fallback = `
-      SELECT Account__c
+      SELECT Account__c, Reason__c
       FROM RouteLog__c
       WHERE Skill__c = 'AI Enhance'
         AND Status__c = 'Declined'
         AND Account__c IN (${idList})
-        AND Reason__c LIKE '[ADD]%'
         AND CreatedDate >= ${since}T00:00:00.000Z
       LIMIT 500
     `;
     const res = await conn.query(fallback);
-    return new Set((res.records || []).map((r) => r.Account__c).filter(Boolean));
+    return pickDeclinedAdds(res.records);
   }
 }
 
@@ -323,6 +335,7 @@ module.exports = {
   rankCandidates,
   loadEnhanceAddCandidates,
   loadRecentlyDeclinedAddAccountIds,
+  isAddReason,
   // Exported for unit tests
   daysAgoISO,
 };

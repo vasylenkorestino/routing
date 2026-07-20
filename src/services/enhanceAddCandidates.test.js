@@ -8,6 +8,7 @@ const {
   mapCandidate,
   rankCandidates,
   loadRecentlyDeclinedAddAccountIds,
+  isAddReason,
   DECLINED_ADD_LOOKBACK_DAYS,
 } = require('./enhanceAddCandidates');
 
@@ -104,28 +105,37 @@ test('rankCandidates sorts by overdue days then estimated gallons', () => {
 
 /* ── declined ADD exclusion ───────────────────────────────── */
 
-test('loadRecentlyDeclinedAddAccountIds returns declined account set', async () => {
+test('isAddReason detects [ADD] prefix only', () => {
+  assert.equal(isAddReason('[ADD] Cafe: overdue'), true);
+  assert.equal(isAddReason('[REMOVE] Cafe: skip'), false);
+  assert.equal(isAddReason(null), false);
+});
+
+test('loadRecentlyDeclinedAddAccountIds filters [ADD] in memory (Reason__c not filterable)', async () => {
   const calls = [];
   const conn = {
     query: async (soql) => {
       calls.push(soql);
       return {
         records: [
-          { Account__c: '001DECLINED' },
-          { Account__c: '001DECLINED' },
-          { Account__c: '001OTHER' },
+          { Account__c: '001DECLINED', Reason__c: '[ADD] Cafe: not a fit' },
+          { Account__c: '001DECLINED', Reason__c: '[ADD] Cafe: again' },
+          { Account__c: '001REMOVE', Reason__c: '[REMOVE] Skip this' },
+          { Account__c: '001OTHER', Reason__c: '[ADD] Other: declined' },
         ],
       };
     },
   };
-  const set = await loadRecentlyDeclinedAddAccountIds(conn, ['001DECLINED', '001OTHER', '001OK']);
+  const set = await loadRecentlyDeclinedAddAccountIds(conn, ['001DECLINED', '001OTHER', '001REMOVE', '001OK']);
   assert.equal(set.has('001DECLINED'), true);
   assert.equal(set.has('001OTHER'), true);
+  assert.equal(set.has('001REMOVE'), false);
   assert.equal(set.has('001OK'), false);
   assert.equal(calls.length, 1);
   assert.match(calls[0], /Skill__c = 'AI Enhance'/);
   assert.match(calls[0], /Status__c = 'Declined'/);
-  assert.match(calls[0], /Reason__c LIKE '\[ADD\]%'/);
+  assert.match(calls[0], /SELECT Account__c, Reason__c/);
+  assert.doesNotMatch(calls[0], /Reason__c LIKE/);
   assert.ok(Number.isInteger(DECLINED_ADD_LOOKBACK_DAYS) && DECLINED_ADD_LOOKBACK_DAYS === 45);
 });
 
