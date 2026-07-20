@@ -49,8 +49,8 @@ export default function RouteTimeline({ route }) {
   const setHoveredStopId = useStore((s) => s.setHoveredStopId);
   const setSelectedStopId = useStore((s) => s.setSelectedStopId);
 
-  const { nodes, mode, isEstimate, totalSec, progressIndex, nextStop, nextStopEta, trafficAware, useTraffic, refreshTraffic, trafficLoading } = useRouteTimeline(route);
-  const refreshingTraffic = useTraffic && trafficLoading; // traffic legs re-loading after a refresh
+  const { nodes, mode, isEstimate, totalSec, progressIndex, nextStop, nextStopEta, useTraffic, refreshTraffic, trafficLoading } = useRouteTimeline(route);
+  const refreshingTraffic = trafficLoading;
   const nextStopId = nextStop?.Id ?? null;
   const nextStopName = nextStop?.Account_Name__c || nextStop?.Name || null;
 
@@ -89,35 +89,33 @@ export default function RouteTimeline({ route }) {
             live times
           </span>
         )}
-        {useTraffic && (
-          <span
-            role="button"
-            tabIndex={0}
-            title="Refresh ETAs with current traffic"
-            aria-label="Refresh ETAs with current traffic"
-            onClick={(e) => { e.stopPropagation(); if (!refreshingTraffic) refreshTraffic(); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (!refreshingTraffic) refreshTraffic(); }
-            }}
-            className="inline-flex items-center gap-0.5 text-[9px] font-medium text-warning bg-warning-bg border border-warning/20 rounded-full px-1.5 py-px cursor-pointer hover:bg-warning/20 transition"
+        <span
+          role="button"
+          tabIndex={0}
+          title={useTraffic ? 'Refresh ETAs with current traffic' : 'Refresh drive times (manual)'}
+          aria-label="Refresh route timeline drive times"
+          onClick={(e) => { e.stopPropagation(); if (!refreshingTraffic) refreshTraffic(); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (!refreshingTraffic) refreshTraffic(); }
+          }}
+          className="inline-flex items-center gap-0.5 text-[9px] font-medium text-warning bg-warning-bg border border-warning/20 rounded-full px-1.5 py-px cursor-pointer hover:bg-warning/20 transition"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="9"
+            height="9"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={refreshingTraffic ? 'animate-spin' : ''}
           >
-            <svg
-              viewBox="0 0 24 24"
-              width="9"
-              height="9"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={refreshingTraffic ? 'animate-spin' : ''}
-            >
-              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-              <path d="M21 3v6h-6" />
-            </svg>
-            {refreshingTraffic ? 'refreshing…' : 'live traffic'}
-          </span>
-        )}
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <path d="M21 3v6h-6" />
+          </svg>
+          {refreshingTraffic ? 'refreshing…' : 'live traffic'}
+        </span>
         {nextStopEta && nextStopName && (
           <span className="text-[9px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-full px-1.5 py-px truncate max-w-[180px]">
             Next: {nextStopName} · {nextStopEta}
