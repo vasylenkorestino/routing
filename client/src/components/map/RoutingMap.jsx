@@ -62,13 +62,17 @@ export default function RoutingMap() {
   useEffect(() => () => clearTimeout(boundsTimer.current), []);
 
   const compareKey = (compareRoutes ?? []).map((r) => r.Id ?? r.id).join(',');
+  // routeId is persisted across refresh, but the route object is not — so on reload
+  // routeId is already set while route is still null. Track presence so we fit once
+  // the route data arrives (without re-fitting on every SSE route-object patch).
+  const hasRoute = Boolean(route);
 
   /**
    * Fit map bounds to the current route plus any selected comparison routes.
    * Keyed on `routeId` (not the `route` object) so background SSE patches to the
    * selected route's data don't re-fit and jump the user's viewport.
-   * Also depends on `mapReady` so the initial load still fits when the map
-   * finishes loading after routes have already been selected.
+   * Also depends on `mapReady` / `hasRoute` so refresh and first paint still fit
+   * when the map or route data arrives after the other.
    */
   useEffect(() => {
     const map = mapRef.current;
@@ -96,7 +100,7 @@ export default function RoutingMap() {
     all.forEach((c) => bounds.extend(c));
     map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeId, compareKey, mapReady]);
+  }, [routeId, compareKey, mapReady, hasRoute]);
 
   const validSLs = (serviceLocations ?? []).filter((sl) => {
     const lat = Number(sl.Latitude__c);
