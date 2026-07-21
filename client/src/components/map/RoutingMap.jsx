@@ -31,8 +31,13 @@ export default function RoutingMap() {
   const mapRef = useRef(null);
   const boundsTimer = useRef(null);
   const [selectedSL, setSelectedSL] = useState(null);
+  /** True once GoogleMap onLoad has fired — used so fit-bounds re-runs if routes loaded first. */
+  const [mapReady, setMapReady] = useState(false);
 
-  const onLoad = useCallback((map) => { mapRef.current = map; }, []);
+  const onLoad = useCallback((map) => {
+    mapRef.current = map;
+    setMapReady(true);
+  }, []);
 
   /** Publishes the viewport (debounced) so layers can load data for the visible area. */
   const onIdle = useCallback(() => {
@@ -62,10 +67,12 @@ export default function RoutingMap() {
    * Fit map bounds to the current route plus any selected comparison routes.
    * Keyed on `routeId` (not the `route` object) so background SSE patches to the
    * selected route's data don't re-fit and jump the user's viewport.
+   * Also depends on `mapReady` so the initial load still fits when the map
+   * finishes loading after routes have already been selected.
    */
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !route || !window.google) return;
+    if (!mapReady || !map || !route || !window.google) return;
 
     const coordsOf = (r) => {
       const stops = r?.Routes__r?.records ?? r?.Routes__r ?? [];
@@ -89,7 +96,7 @@ export default function RoutingMap() {
     all.forEach((c) => bounds.extend(c));
     map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeId, compareKey]);
+  }, [routeId, compareKey, mapReady]);
 
   const validSLs = (serviceLocations ?? []).filter((sl) => {
     const lat = Number(sl.Latitude__c);
