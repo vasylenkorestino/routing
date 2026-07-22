@@ -27,6 +27,7 @@ export const addPoint = (body) => client.post('/routing/add-point', body).then((
 /* ── Shapes & templates ──────────────────────────────────── */
 export const getShapes = (params) => client.get('/routing/shapes', { params }).then((r) => r.data);
 export const getShapeAccounts = (params) => client.get('/routing/shape-accounts', { params }).then((r) => r.data);
+export const updateShape = (body) => client.post('/routing/update-shape', body).then((r) => r.data);
 export const getCustomRoutes = (params) => client.get('/routing/custom-routes', { params }).then((r) => r.data);
 export const getGoogleRouteTemplates = (params) => client.get('/routing/google-route-templates', { params }).then((r) => r.data);
 export const generateRouteByShape = (body) => client.post('/routing/generate-route-by-shape', body).then((r) => r.data);

@@ -6,6 +6,9 @@ import RouteLayer, { CompareRouteLayer } from './RouteLayer';
 import TicketLayer from './TicketLayer';
 import RouteLogLayer from './RouteLogLayer';
 import ShapeLayer from './ShapeLayer';
+import ShapeAccountLayer from './ShapeAccountLayer';
+import ShapeActionsModal from './ShapeActionsModal';
+import ShapeEditPanel from './ShapeEditPanel';
 import MapOverlayPanel from './MapOverlayPanel';
 import MapLegend from './MapLegend';
 import RouteLogLegend from './RouteLogLegend';
@@ -29,10 +32,12 @@ export default function RoutingMap() {
   const serviceLocations = useStore((s) => s.serviceLocations);
   const setMapBounds = useStore((s) => s.setMapBounds);
   const mapRef = useRef(null);
+  const shapeLayerRef = useRef(null);
   const boundsTimer = useRef(null);
   const [selectedSL, setSelectedSL] = useState(null);
   /** True once GoogleMap onLoad has fired — used so fit-bounds re-runs if routes loaded first. */
   const [mapReady, setMapReady] = useState(false);
+  const editingShapeId = useStore((s) => s.editingShapeId);
 
   const onLoad = useCallback((map) => {
     mapRef.current = map;
@@ -139,7 +144,8 @@ export default function RoutingMap() {
       <CompareRouteLayer />
       {layers.tickets.visible && <TicketLayer tickets={layers.tickets.data} />}
       {routeId && !compareMode && <RouteLogLayer />}
-      {layers.shapes.visible && <ShapeLayer shapes={layers.shapes.data} />}
+      {layers.shapes.visible && <ShapeLayer ref={shapeLayerRef} shapes={layers.shapes.data} />}
+      <ShapeAccountLayer />
 
       {/* Service Location markers */}
       {validSLs.map((sl) => (
@@ -188,6 +194,8 @@ export default function RoutingMap() {
     {/* AI flag layers + stop status legends — hidden in compare mode */}
     {routeId && !compareMode && <RouteLogLegend />}
     {layers.routes.visible && !compareMode && <MapLegend />}
+    {editingShapeId && <ShapeEditPanel shapeLayerRef={shapeLayerRef} />}
+    <ShapeActionsModal />
     </div>
     <MapOverlayPanel />
     </div>

@@ -275,6 +275,10 @@ router.post('/add-point', wrap(async (req, res) => {
   res.json(await apexPostRoute('add-point', req.body));
 }));
 
+router.post('/update-shape', wrap(async (req, res) => {
+  res.json(await apexPostRoute('update-shape', req.body));
+}));
+
 router.post('/ai-approve', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
   res.json(await apexPostRoute('ai-approve', req.body));

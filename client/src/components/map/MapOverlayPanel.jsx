@@ -82,7 +82,7 @@ export default function MapOverlayPanel() {
   const layers = useStore((st) => st.layers);
   const selectedLayerTab = useStore((st) => st.selectedLayerTab);
   const setSelectedLayerTab = useStore((st) => st.setSelectedLayerTab);
-  const toggleLayer = useStore((st) => st.toggleLayer);
+  const setLayerVisible = useStore((st) => st.setLayerVisible);
   const setLayerData = useStore((st) => st.setLayerData);
   const mergeTicketLayerData = useStore((st) => st.mergeTicketLayerData);
   const recordType = useStore((st) => st.recordType);
@@ -100,9 +100,9 @@ export default function MapOverlayPanel() {
   // BBoxes already fetched this session, per ticket type — skips redundant viewport fetches.
   const fetchedBoxes = useRef([]);
 
-  const fetchTickets = useCallback(async (bbox, { initial = false, ticketType = null } = {}) => {
-    const setBusy = initial ? setLayerLoading : setTicketFetching;
-    setBusy(true);
+  const fetchTickets = useCallback(async (bbox, { initial = false, ticketType = null, quiet = false } = {}) => {
+    const setBusy = quiet ? null : (initial ? setLayerLoading : setTicketFetching);
+    setBusy?.(true);
     try {
       const params = {
         recordTypeName: recordType,
@@ -119,13 +119,13 @@ export default function MapOverlayPanel() {
         mergeTicketLayerData(tickets);
       }
       if (bbox) fetchedBoxes.current = [...fetchedBoxes.current.slice(-39), { ...bbox, _type: ticketType }];
-      if (!useStore.getState().layers.tickets.visible) toggleLayer('tickets');
+      if (!useStore.getState().layers.tickets.visible) setLayerVisible('tickets', true);
     } catch {
       /* non-fatal — user can pan again */
     } finally {
-      setBusy(false);
+      setBusy?.(false);
     }
-  }, [recordType, clearTicketsIsolation, setLayerData, mergeTicketLayerData, toggleLayer]);
+  }, [recordType, clearTicketsIsolation, setLayerData, mergeTicketLayerData, setLayerVisible]);
 
   /** True when this bbox was already fetched for the given ticket type. */
   const alreadyFetched = (bbox, type) =>
@@ -157,15 +157,54 @@ export default function MapOverlayPanel() {
     if (willShow) ensureTypeLoaded(type);
   }, [visibleTicketTypes, toggleTicketTypeVisibility, ensureTypeLoaded]);
 
+  /** Loads tickets for the route/viewport area (default UCO type). */
+  const ensureTicketsLoaded = useCallback(async ({ quiet = false } = {}) => {
+    const st = useStore.getState();
+    if (st.layers.tickets.data.length > 0 && !st.ticketsIsolated) return;
+    const bbox = routeBBox(route) || viewportBBox();
+    fetchedBoxes.current = [];
+    resetTicketTypeVisibility();
+    await fetchTickets(bbox, { initial: true, ticketType: DEFAULT_TICKET_TYPE, quiet });
+  }, [route, mapBounds, resetTicketTypeVisibility, fetchTickets]);
+
+  /** Loads shapes for the current record type when the layer is empty. */
+  const ensureShapesLoaded = useCallback(async ({ quiet = false } = {}) => {
+    if (useStore.getState().layers.shapes.data.length > 0) return;
+    if (!quiet) setLayerLoading(true);
+    try {
+      const data = await routingApi.getShapes({ recordTypeName: recordType });
+      const shapes = Array.isArray(data) ? data : data.shapes ?? [];
+      setLayerData('shapes', shapes);
+    } catch {
+      /* non-fatal */
+    } finally {
+      if (!quiet) setLayerLoading(false);
+    }
+  }, [recordType, setLayerData]);
+
+  /**
+   * Eye icon: show/hide the layer on the map without switching tabs.
+   * Turning a layer on also lazy-loads its data when empty.
+   */
+  const handleEyeClick = useCallback(async (tab, e) => {
+    e.stopPropagation();
+    const currentlyVisible = useStore.getState().layers[tab]?.visible;
+    if (currentlyVisible) {
+      setLayerVisible(tab, false);
+      return;
+    }
+    if (tab === 'tickets') await ensureTicketsLoaded({ quiet: true });
+    if (tab === 'shapes') await ensureShapesLoaded({ quiet: true });
+    setLayerVisible(tab, true);
+  }, [ensureTicketsLoaded, ensureShapesLoaded, setLayerVisible]);
+
   /* Initial loads when a tab is opened */
   useEffect(() => {
     if (!open) return;
     if (selectedLayerTab === 'tickets' && (layers.tickets.data.length === 0 || ticketsIsolated)) {
-      // Default: only UCO tickets near the selected route (or the visible viewport).
-      const bbox = routeBBox(route) || viewportBBox();
-      fetchedBoxes.current = [];
-      resetTicketTypeVisibility();
-      fetchTickets(bbox, { initial: true, ticketType: DEFAULT_TICKET_TYPE });
+      ensureTicketsLoaded().then(() => {
+        if (!useStore.getState().layers.tickets.visible) setLayerVisible('tickets', true);
+      });
     } else if (selectedLayerTab === 'tickets' && routeId) {
       // Route switched — merge the new route's area for every currently-visible type.
       const bbox = routeBBox(route);
@@ -176,12 +215,9 @@ export default function MapOverlayPanel() {
       }
     }
     if (selectedLayerTab === 'shapes' && layers.shapes.data.length === 0) {
-      setLayerLoading(true);
-      routingApi.getShapes({ recordTypeName: recordType }).then((data) => {
-        const shapes = Array.isArray(data) ? data : data.shapes ?? [];
-        setLayerData('shapes', shapes);
-        if (!layers.shapes.visible) toggleLayer('shapes');
-      }).catch(() => {}).finally(() => setLayerLoading(false));
+      ensureShapesLoaded().then(() => {
+        if (!useStore.getState().layers.shapes.visible) setLayerVisible('shapes', true);
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLayerTab, open, routeId]);
@@ -285,8 +321,8 @@ export default function MapOverlayPanel() {
                   {count > 0 && <span className="ml-1 text-[10px] text-txt-secondary">({count})</span>}
                   <span
                     className={`ml-1 cursor-pointer text-xs transition-opacity ${layers[tab].visible ? 'opacity-100' : 'opacity-30'}`}
-                    onClick={(e) => { e.stopPropagation(); toggleLayer(tab); }}
-                    title={layers[tab].visible ? 'Hide layer' : 'Show layer'}
+                    onClick={(e) => handleEyeClick(tab, e)}
+                    title={layers[tab].visible ? 'Hide on map' : 'Show on map (without switching tab)'}
                   >
                     {layers[tab].visible ? '👁' : '👁‍🗨'}
                   </span>

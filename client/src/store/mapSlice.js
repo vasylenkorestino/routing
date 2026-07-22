@@ -145,6 +145,15 @@ const mapSlice = (set, get) => ({
       },
     })),
 
+  /** Sets a layer's map visibility without flipping (used by eye icons). */
+  setLayerVisible: (name, visible) =>
+    set((s) => ({
+      layers: {
+        ...s.layers,
+        [name]: { ...s.layers[name], visible: !!visible },
+      },
+    })),
+
   setLayerData: (name, data, resetVisibility = false) => {
     set((s) => ({
       layers: {
@@ -192,6 +201,35 @@ const mapSlice = (set, get) => ({
   setSelectedShapeId: (selectedShapeId) => set({ selectedShapeId }),
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapZoom: (mapZoom) => set({ mapZoom }),
+
+  /** Shape clicked on the map — opens Edit / Show Accounts menu. */
+  shapeActionsTarget: null,
+  setShapeActionsTarget: (shapeActionsTarget) => set({ shapeActionsTarget }),
+
+  /** Shape currently in boundary/property edit mode. */
+  editingShapeId: null,
+  setEditingShapeId: (editingShapeId) => set({ editingShapeId }),
+
+  /**
+   * Accounts loaded for "Show Accounts" on shapes.
+   * Keyed by shape Id: { accounts, visible }.
+   */
+  shapeAccountLayers: {},
+
+  setShapeAccountLayer: (shapeId, patch) =>
+    set((s) => ({
+      shapeAccountLayers: {
+        ...s.shapeAccountLayers,
+        [shapeId]: { ...(s.shapeAccountLayers[shapeId] || { accounts: [], visible: false }), ...patch },
+      },
+    })),
+
+  clearShapeAccountLayer: (shapeId) =>
+    set((s) => {
+      const next = { ...s.shapeAccountLayers };
+      delete next[shapeId];
+      return { shapeAccountLayers: next };
+    }),
 });
 
 export default mapSlice;
