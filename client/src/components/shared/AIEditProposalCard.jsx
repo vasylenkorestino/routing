@@ -26,11 +26,52 @@ function ChangeRow({ label, from, to }) {
 export default function AIEditProposalCard({ proposal: initial }) {
   const refreshRoutes = useStore((s) => s.refreshRoutes);
   const selectRoute = useStore((s) => s.selectRoute);
+  const focusAccountOnMap = useStore((s) => s.focusAccountOnMap);
+  const clearMapFocusMarker = useStore((s) => s.clearMapFocusMarker);
+  const mapFocusMarker = useStore((s) => s.mapFocusMarker);
   const [proposal, setProposal] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [localStatus, setLocalStatus] = useState(initial?.status || 'pending');
 
   if (!proposal?.proposalId) return null;
+
+  const isShownOnMap = (stop) =>
+    !!(mapFocusMarker?.accountId && stop?.accountId && mapFocusMarker.accountId === stop.accountId);
+
+  /** Shows or hides the focus pin for a proposed stop. */
+  const handleToggleOnMap = async (stop) => {
+    if (isShownOnMap(stop)) {
+      clearMapFocusMarker();
+      return;
+    }
+    let lat = Number(stop?.lat);
+    let lng = Number(stop?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) {
+      try {
+        const q = stop.accountName || stop.accountId;
+        if (!q) { toast.info('No map coordinates for this account.'); return; }
+        const data = await routingApi.searchAccounts({ searchText: q });
+        const list = Array.isArray(data) ? data : data.accounts || [];
+        const match = list.find((a) => a.Id === stop.accountId) || list[0];
+        lat = Number(match?.MALatitude__c);
+        lng = Number(match?.MALongitude__c);
+      } catch {
+        toast.error('Could not load account coordinates.');
+        return;
+      }
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) {
+      toast.info('No map coordinates for this account.');
+      return;
+    }
+    focusAccountOnMap({
+      accountId: stop.accountId,
+      accountName: stop.accountName,
+      lat,
+      lng,
+      address: stop.address || null,
+    });
+  };
 
   const { changes = {}, summary, routeName, reason } = proposal;
   const header = changes.header || {};
@@ -103,12 +144,31 @@ export default function AIEditProposalCard({ proposal: initial }) {
           <div className="pt-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-success">Stops to add ({changes.addStops.length})</span>
             <ul className="mt-1 space-y-1">
-              {changes.addStops.map((s) => (
+              {changes.addStops.map((s) => {
+                const shown = isShownOnMap(s);
+                return (
                 <li key={s.accountId} className="text-[11px] text-txt pl-2 border-l-2 border-success/40">
-                  <span className="font-medium">{s.accountName}</span>
-                  {s.address && <span className="block text-txt-secondary truncate">{s.address}</span>}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-medium">{s.accountName}</span>
+                      {s.address && <span className="block text-txt-secondary truncate">{s.address}</span>}
+                    </div>
+                    <button
+                      type="button"
+                      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                        shown
+                          ? 'text-txt-secondary border-border hover:bg-bg'
+                          : 'text-primary border-primary/30 hover:bg-primary/10'
+                      }`}
+                      onClick={() => handleToggleOnMap(s)}
+                      title={shown ? 'Hide this account from the map' : 'Center map on this account'}
+                    >
+                      {shown ? 'Hide from map' : 'Show on map'}
+                    </button>
+                  </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </div>
         )}
@@ -117,12 +177,31 @@ export default function AIEditProposalCard({ proposal: initial }) {
           <div className="pt-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-error">Stops to remove ({changes.removeStops.length})</span>
             <ul className="mt-1 space-y-1">
-              {changes.removeStops.map((s) => (
+              {changes.removeStops.map((s) => {
+                const shown = isShownOnMap(s);
+                return (
                 <li key={s.stopId} className="text-[11px] text-txt pl-2 border-l-2 border-error/40">
-                  <span className="font-medium">#{s.priority} {s.accountName}</span>
-                  {s.address && <span className="block text-txt-secondary truncate">{s.address}</span>}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-medium">#{s.priority} {s.accountName}</span>
+                      {s.address && <span className="block text-txt-secondary truncate">{s.address}</span>}
+                    </div>
+                    <button
+                      type="button"
+                      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                        shown
+                          ? 'text-txt-secondary border-border hover:bg-bg'
+                          : 'text-primary border-primary/30 hover:bg-primary/10'
+                      }`}
+                      onClick={() => handleToggleOnMap(s)}
+                      title={shown ? 'Hide this account from the map' : 'Center map on this account'}
+                    >
+                      {shown ? 'Hide from map' : 'Show on map'}
+                    </button>
+                  </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </div>
         )}

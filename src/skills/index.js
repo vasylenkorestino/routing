@@ -13,6 +13,8 @@ const CompareRoutesSkill = require('./compareRoutes');
 const AgentMemorySkill = require('./memory/agentMemory');
 const RouteEditProposalSkill = require('./routeEditProposal');
 const RouteStopsSkill = require('./routeStops');
+const RouteNearbyCandidatesSkill = require('./routeNearbyCandidates');
+const MapFocusSkill = require('./mapFocus');
 
 /** Central skill registry. Loads all skills and provides lookup by name. */
 class SkillRegistry {
@@ -38,6 +40,8 @@ class SkillRegistry {
       new AgentMemorySkill(),
       new RouteEditProposalSkill(),
       new RouteStopsSkill(),
+      new RouteNearbyCandidatesSkill(),
+      new MapFocusSkill(),
     ];
     for (const skill of defaults) {
       this.register(skill);

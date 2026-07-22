@@ -12,6 +12,8 @@ const TOOL_LABELS = {
   route_generation: 'Generating routes',
   route_edit_proposal: 'Proposing route edits',
   route_stops: 'Loading route stops',
+  route_nearby_candidates: 'Finding accounts along the route',
+  map_focus: 'Centering map on account',
   route_parameters: 'Loading route parameters',
   geo_utils: 'Running geo calculations',
   route_logger: 'Logging decisions',
@@ -243,6 +245,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
       let lastToolNames = [];
       const createdRoutes = [];
       const editProposals = [];
+      const mapFocusTargets = [];
 
       emit({ phase: 'thinking', iteration: 0, label: 'Understanding your request…' });
 
@@ -334,6 +337,9 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
               if (toolUse.name === 'route_edit_proposal' && result?.proposalId) {
                 editProposals.push(result);
               }
+              if (toolUse.name === 'map_focus' && result?.mapFocus && result.lat != null) {
+                mapFocusTargets.push(result);
+              }
             } catch (err) {
               logger.error(`Tool ${toolUse.name} failed`, { error: err.message });
               result = { error: err.message };
@@ -372,6 +378,7 @@ function createOrchestrator(toolDefinitions, skillRegistry, recorder, options = 
         toolCallsExecuted: messages.filter((m) => m.role === 'user' && Array.isArray(m.content)).length,
         createdRoutes,
         editProposals,
+        mapFocus: mapFocusTargets,
         steps: recorder ? recorder.steps : [],
       };
     },

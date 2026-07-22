@@ -9,6 +9,7 @@ import ShapeLayer from './ShapeLayer';
 import ShapeAccountLayer from './ShapeAccountLayer';
 import ShapeActionsModal from './ShapeActionsModal';
 import ShapeEditPanel from './ShapeEditPanel';
+import MapFocusMarker from './MapFocusMarker';
 import MapOverlayPanel from './MapOverlayPanel';
 import MapLegend from './MapLegend';
 import RouteLogLegend from './RouteLogLegend';
@@ -146,6 +147,7 @@ export default function RoutingMap() {
       {routeId && !compareMode && <RouteLogLayer />}
       {layers.shapes.visible && <ShapeLayer ref={shapeLayerRef} shapes={layers.shapes.data} />}
       <ShapeAccountLayer />
+      <MapFocusMarker />
 
       {/* Service Location markers */}
       {validSLs.map((sl) => (

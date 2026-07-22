@@ -1,9 +1,30 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import useStore from '../../store';
 import { chatAsync } from '../../api/routing';
 import AIProgressSteps from './AIProgressSteps';
 import AIEditProposalCard from './AIEditProposalCard';
 import { toast } from '../ui/Toast';
+
+/** Builds a short UI label for the routes included in an AI context payload. */
+function contextLabelFromPayload(context) {
+  if (!context) return null;
+  if (context.multiRoute && Array.isArray(context.routes)) {
+    const names = context.routes.map((r) => r.routeName).filter(Boolean);
+    return {
+      count: names.length,
+      names,
+      locked: true,
+    };
+  }
+  if (context.routeName || context.routeId) {
+    return {
+      count: 1,
+      names: [context.routeName || context.routeId],
+      locked: true,
+    };
+  }
+  return null;
+}
 
 /** Collapsible AI chat panel with async progress and live placeholder messages. */
 export default function AIChat() {
@@ -19,8 +40,11 @@ export default function AIChat() {
   const aiSelectedRouteIds = useStore((s) => s.aiSelectedRouteIds);
   const clearAiSelection = useStore((s) => s.clearAiSelection);
   const refreshAfterAiCreate = useStore((s) => s.refreshAfterAiCreate);
+  const focusAccountOnMap = useStore((s) => s.focusAccountOnMap);
   const [input, setInput] = useState('');
   const [activePlaceholderIdx, setActivePlaceholderIdx] = useState(null);
+  /** Snapshot of AI route context for the in-flight request (survives route switches). */
+  const [lockedContextLabel, setLockedContextLabel] = useState(null);
   const scrollRef = useRef(null);
 
   const selectedRoutes = routes.filter((r) => aiSelectedRouteIds[r.Id ?? r.id]);
@@ -30,12 +54,48 @@ export default function AIChat() {
     setTimeout(() => scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight), 50);
   }, []);
 
+  /** Compact ordered stop summaries for chat (name + coords for corridor/add-by-name). */
+  const summarizeStops = useCallback((rawStops) => {
+    const list = Array.isArray(rawStops) ? rawStops : [];
+    const sorted = [...list].sort((a, b) => (a.Priority__c ?? 9999) - (b.Priority__c ?? 9999));
+    return sorted.slice(0, 80).map((s, i) => ({
+      accountId: s.AccountId__c || s.Account__c || null,
+      accountName: s.Account_Name__c || s.Name || null,
+      lat: Number(s.Latitude__c) || null,
+      lng: Number(s.Longitude__c) || null,
+      priority: s.Priority__c ?? i + 1,
+    })).filter((s) => s.accountId || s.accountName);
+  }, []);
+
+  /** Accounts from recent proposal cards — used when user says "show on the map" with no name. */
+  const recentFocusCandidates = useMemo(() => {
+    const out = [];
+    const seen = new Set();
+    for (let i = chatMessages.length - 1; i >= 0 && out.length < 8; i -= 1) {
+      const proposals = chatMessages[i]?.editProposals || [];
+      for (const p of proposals) {
+        for (const s of p?.changes?.addStops || []) {
+          if (!s?.accountId || seen.has(s.accountId)) continue;
+          seen.add(s.accountId);
+          out.push({ accountId: s.accountId, accountName: s.accountName || null });
+        }
+        for (const s of p?.changes?.removeStops || []) {
+          if (!s?.accountId || seen.has(s.accountId)) continue;
+          seen.add(s.accountId);
+          out.push({ accountId: s.accountId, accountName: s.accountName || null });
+        }
+      }
+    }
+    return out;
+  }, [chatMessages]);
+
   const buildContext = useCallback(() => {
     if (selectedCount > 1) {
       return {
         multiRoute: true,
         serviceDate,
         recordType,
+        recentFocusCandidates,
         routes: selectedRoutes.map((r) => {
           const stops = r.Routes__r?.records ?? r.Routes__r ?? r.points ?? [];
           return {
@@ -65,9 +125,13 @@ export default function AIChat() {
         serviceLocationStart: r.Service_Location_Start__c,
         serviceLocationEnd: r.Service_Location_End__c,
         recordType,
+        stops: summarizeStops(stops),
+        recentFocusCandidates,
       };
     }
-    if (!route) return undefined;
+    if (!route) {
+      return recentFocusCandidates.length ? { recentFocusCandidates, recordType } : undefined;
+    }
     const stops = route.Routes__r?.records ?? route.Routes__r ?? [];
     return {
       routeId: route.Id,
@@ -79,8 +143,39 @@ export default function AIChat() {
       stopsCount: stops.length,
       serviceLocationStart: route.Service_Location_Start__c,
       serviceLocationEnd: route.Service_Location_End__c,
+      recordType,
+      stops: summarizeStops(stops),
+      recentFocusCandidates,
     };
-  }, [route, selectedCount, selectedRoutes, serviceDate, recordType]);
+  }, [route, selectedCount, selectedRoutes, serviceDate, recordType, summarizeStops, recentFocusCandidates]);
+
+  /** Live context label when idle; locked snapshot while a request is processing. */
+  const liveContextLabel = useMemo(() => {
+    if (selectedCount > 0) {
+      return {
+        count: selectedCount,
+        names: selectedRoutes.map((r) => r.Name).filter(Boolean),
+        locked: false,
+        canClear: true,
+      };
+    }
+    if (route) {
+      return {
+        count: 1,
+        names: [route.Name || route.Id],
+        locked: false,
+        canClear: false,
+      };
+    }
+    return null;
+  }, [selectedCount, selectedRoutes, route]);
+
+  const contextLabel = isGenerating && lockedContextLabel ? lockedContextLabel : liveContextLabel;
+
+  /** Drop the locked label once generation finishes. */
+  useEffect(() => {
+    if (!isGenerating) setLockedContextLabel(null);
+  }, [isGenerating]);
 
   useEffect(() => {
     if (activePlaceholderIdx == null || aiJobStatus === 'idle') return;
@@ -102,9 +197,21 @@ export default function AIChat() {
       const { aiJobResult, aiJobPartialResults } = useStore.getState();
       const createdRoutes = aiJobResult?.createdRoutes || aiJobPartialResults?.createdRoutes || [];
       const editProposals = aiJobResult?.editProposals || aiJobPartialResults?.editProposals || [];
+      const mapFocus = aiJobResult?.mapFocus || aiJobPartialResults?.mapFocus || [];
       if (createdRoutes.length > 0) {
         refreshAfterAiCreate(createdRoutes).then((route) => {
           if (route) toast.success(`Route "${route.Name}" is ready.`);
+        });
+      }
+      // Center map when the AI called map_focus (e.g. "show on the map").
+      const target = Array.isArray(mapFocus) ? mapFocus[0] : null;
+      if (target?.lat != null && target?.lng != null) {
+        focusAccountOnMap({
+          accountId: target.accountId,
+          accountName: target.accountName,
+          lat: target.lat,
+          lng: target.lng,
+          address: target.address,
         });
       }
       setGenerating(false);
@@ -121,7 +228,7 @@ export default function AIChat() {
       clearAIJob();
       scrollBottom();
     }
-  }, [activePlaceholderIdx, aiJobStatus, aiJobSteps, aiJobFindings, aiJobProgress, aiJobMessage, aiJobError, updateMessage, setGenerating, clearAIJob, scrollBottom, refreshAfterAiCreate]);
+  }, [activePlaceholderIdx, aiJobStatus, aiJobSteps, aiJobFindings, aiJobProgress, aiJobMessage, aiJobError, updateMessage, setGenerating, clearAIJob, scrollBottom, refreshAfterAiCreate, focusAccountOnMap]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -136,7 +243,9 @@ export default function AIChat() {
     setGenerating(true);
     scrollBottom();
 
+    // Snapshot context at submit time so route switches mid-request don't change the answer.
     const context = buildContext();
+    setLockedContextLabel(contextLabelFromPayload(context));
     const body = { message: text, recordType, context, sessionId: chatSessionId };
 
     try {
@@ -158,9 +267,10 @@ export default function AIChat() {
     } catch (err) {
       addMessage({ role: 'assistant', content: `Error: ${err.message}` });
       setGenerating(false);
+      setLockedContextLabel(null);
     }
     scrollBottom();
-  }, [input, isGenerating, addMessage, setGenerating, scrollBottom, buildContext, recordType, chatSessionId, setChatSessionId, route, selectedCount, trackAIJob]);
+  }, [input, isGenerating, addMessage, setGenerating, scrollBottom, buildContext, recordType, chatSessionId, setChatSessionId, trackAIJob]);
 
   return (
     <div className="flex flex-col h-full bg-surface">
@@ -199,21 +309,40 @@ export default function AIChat() {
         ))}
       </div>
 
-      {selectedCount > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1.5 border-t border-border bg-ai-bg/60">
-          <span className="text-[11px] font-medium text-ai">
-            ✦ {selectedCount} route{selectedCount > 1 ? 's' : ''} in AI context
+      {contextLabel ? (
+        <div className={`flex items-center gap-2 px-3 py-1.5 border-t border-border ${
+          contextLabel.locked ? 'bg-amber-50' : 'bg-ai-bg/60'
+        }`}
+        >
+          <span className={`text-[11px] font-medium shrink-0 ${contextLabel.locked ? 'text-amber-700' : 'text-ai'}`}>
+            ✦ {contextLabel.count} route{contextLabel.count > 1 ? 's' : ''} in AI context
+            {contextLabel.locked ? ' (locked)' : ''}
           </span>
-          <span className="text-[11px] text-txt-secondary truncate flex-1">
-            {selectedRoutes.map((r) => r.Name).join(', ')}
-          </span>
-          <button
-            className="text-[11px] text-txt-secondary hover:text-error transition shrink-0"
-            onClick={clearAiSelection}
-            title="Clear AI selection"
+          <span
+            className="text-[11px] text-txt-secondary truncate flex-1"
+            title={contextLabel.names.join(', ')}
           >
-            clear
-          </button>
+            {contextLabel.names.join(', ')}
+          </span>
+          {contextLabel.locked ? (
+            <span className="text-[10px] text-amber-700/80 shrink-0" title="Context stays on this route until the AI finishes">
+              processing…
+            </span>
+          ) : contextLabel.canClear ? (
+            <button
+              className="text-[11px] text-txt-secondary hover:text-error transition shrink-0"
+              onClick={clearAiSelection}
+              title="Clear AI selection"
+            >
+              clear
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-t border-border bg-bg/50">
+          <span className="text-[11px] text-txt-secondary">
+            ✦ No route in AI context — select a route first
+          </span>
         </div>
       )}
 

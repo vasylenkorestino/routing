@@ -159,7 +159,7 @@ class RouteEditProposalSkill extends BaseSkill {
     if (!rows.length) return null;
     const route = rows[0];
     const stops = await sf.query(
-      `SELECT Id, AccountId__c, Account_Name__c, Priority__c, Container_Address__c ` +
+      `SELECT Id, AccountId__c, Account_Name__c, Priority__c, Container_Address__c, Latitude__c, Longitude__c ` +
       `FROM Route__c WHERE GRoute_Id__c = '${googleRouteId}' ORDER BY Priority__c ASC`,
     );
     route.stops = stops;
@@ -195,12 +195,15 @@ class RouteEditProposalSkill extends BaseSkill {
       if (ctx.addAccountIds?.length) {
         const acctList = ctx.addAccountIds.map((id) => `'${id}'`).join(',');
         const acctRows = await sf.query(
-          `SELECT Id, Name, ShippingStreet, ShippingCity, ShippingState FROM Account WHERE Id IN (${acctList})`,
+          `SELECT Id, Name, ShippingStreet, ShippingCity, ShippingState, MALatitude__c, MALongitude__c ` +
+          `FROM Account WHERE Id IN (${acctList})`,
         );
         acctRows.forEach((a) => {
           accounts[a.Id] = {
             name: a.Name,
             address: [a.ShippingStreet, a.ShippingCity, a.ShippingState].filter(Boolean).join(', '),
+            lat: a.MALatitude__c != null ? Number(a.MALatitude__c) : null,
+            lng: a.MALongitude__c != null ? Number(a.MALongitude__c) : null,
           };
         });
       }
@@ -254,6 +257,8 @@ class RouteEditProposalSkill extends BaseSkill {
         accountName: s.Account_Name__c,
         priority: s.Priority__c,
         address: s.Container_Address__c,
+        lat: s.Latitude__c != null ? Number(s.Latitude__c) : null,
+        lng: s.Longitude__c != null ? Number(s.Longitude__c) : null,
       }));
 
     const onRouteAccounts = new Set(stops.map((s) => s.AccountId__c).filter(Boolean));
@@ -263,6 +268,8 @@ class RouteEditProposalSkill extends BaseSkill {
         accountId: id,
         accountName: names.accounts[id]?.name || id,
         address: names.accounts[id]?.address || '',
+        lat: names.accounts[id]?.lat ?? null,
+        lng: names.accounts[id]?.lng ?? null,
       }));
 
     return { header, addStops, removeStops };

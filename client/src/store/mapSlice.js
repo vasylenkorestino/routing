@@ -137,6 +137,29 @@ const mapSlice = (set, get) => ({
 
   clearFocusTicket: () => set({ focusTicketId: null }),
 
+  /** Temporary map pin for AI / "Show on map" (not a ticket layer entry). */
+  mapFocusMarker: null,
+
+  /** Pans/zooms the map to an account and drops a focus pin. */
+  focusAccountOnMap: ({ accountId, accountName, lat, lng, address }) => {
+    const latitude = Number(lat);
+    const longitude = Number(lng);
+    if (Number.isNaN(latitude) || Number.isNaN(longitude)) return;
+    set({
+      mapCenter: { lat: latitude, lng: longitude },
+      mapZoom: 15,
+      mapFocusMarker: {
+        accountId: accountId || null,
+        accountName: accountName || 'Account',
+        address: address || null,
+        lat: latitude,
+        lng: longitude,
+      },
+    });
+  },
+
+  clearMapFocusMarker: () => set({ mapFocusMarker: null }),
+
   toggleLayer: (name) =>
     set((s) => ({
       layers: {

@@ -6,6 +6,10 @@ const QUESTION_PATTERN = /\b(why|what|how|explain|when did|who|which|tell me|is 
 const HISTORY_PATTERN = /\b(histor|past|usual|typically|before|last time|previous|compare)\b/i;
 const REDESIGN_PATTERN = /\b(rebuild|redesign|recreate|from scratch|split route|combine routes|merge routes|optimize entire|full redesign)\b/i;
 const EXPLORATORY_PATTERN = /\b(should (i|we)|what if|recommend|suggest|what would|ideas? for|options? for|help me plan)\b/i;
+/** Along-route / between-stops discovery — needs corridor candidates, not bare route_edit_simple. */
+const CORRIDOR_PATTERN = /\b(along the way|on the way|in[\s-]?between|between (the )?(first|last|stops?|stop \d)|nearby|near (the )?(route|path|stops?)|fill the gap|stops? that may need|need service (in[\s-]?)?between|around (stop|the route))\b/i;
+/** User wants the map centered on an account (named or the last proposed one). */
+const MAP_FOCUS_PATTERN = /\b(show (it |them |that |this )?(on (the )?map)|show on (the )?map|center (on|the map)|zoom (to|in on)|locate|find on (the )?map|pan to|where (is|on the map))\b/i;
 
 /** True when the user is asking for an edit to be applied (not merely asking about one). */
 function isDirectEditCommand(message) {
@@ -34,6 +38,18 @@ function classifyChatIntent(message, context) {
     };
   }
 
+  // Map focus works with or without a selected route (uses name or recentFocusCandidates).
+  if (MAP_FOCUS_PATTERN.test(msg)) {
+    return {
+      mode: 'map_focus',
+      tier: 'map_focus',
+      needsApproval: false,
+      loadHistory: false,
+      usePrefetch: false,
+      routeId,
+    };
+  }
+
   if (!hasRoute) {
     return {
       mode: 'qa',
@@ -54,6 +70,18 @@ function classifyChatIntent(message, context) {
       tier: 'redesign',
       needsApproval: true,
       loadHistory: true,
+      usePrefetch: false,
+      routeId,
+    };
+  }
+
+  // Corridor / along-the-way discovery before simple-edit so "stops between…" is not trapped by ROUTE_EDIT_PATTERN.
+  if (CORRIDOR_PATTERN.test(msg)) {
+    return {
+      mode: 'route_edit_plan',
+      tier: 'exploratory',
+      needsApproval: true,
+      loadHistory: false,
       usePrefetch: false,
       routeId,
     };

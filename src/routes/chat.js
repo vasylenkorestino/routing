@@ -19,19 +19,23 @@ const TASK_MODES = {
     maxIterations: 2,
   },
   route_edit_plan: {
-    toolNames: ['route_enhancement', 'compare_routes', 'route_edit_proposal', 'route_stops'],
+    toolNames: ['route_nearby_candidates', 'route_enhancement', 'compare_routes', 'route_edit_proposal', 'route_stops'],
     maxIterations: 3,
   },
   route_redesign: {
-    toolNames: ['route_enhancement', 'compare_routes', 'service_due_analysis', 'account_discovery', 'route_generation', 'route_edit_proposal', 'route_stops'],
+    toolNames: ['route_enhancement', 'compare_routes', 'service_due_analysis', 'account_discovery', 'route_generation', 'route_edit_proposal', 'route_stops', 'route_nearby_candidates'],
     maxIterations: 4,
   },
   route_edit: {
-    toolNames: ['route_enhancement', 'compare_routes', 'route_edit_proposal', 'route_stops', 'route_logger'],
+    toolNames: ['route_enhancement', 'compare_routes', 'route_edit_proposal', 'route_stops', 'route_logger', 'route_nearby_candidates'],
     maxIterations: 3,
   },
+  map_focus: {
+    toolNames: ['map_focus', 'route_stops'],
+    maxIterations: 2,
+  },
   qa: {
-    toolNames: ['route_stops', 'route_enhancement', 'salesforce_query', 'agent_memory'],
+    toolNames: ['route_stops', 'route_enhancement', 'route_nearby_candidates', 'salesforce_query', 'agent_memory', 'map_focus'],
     maxIterations: 2,
   },
   multi_route: {
@@ -39,7 +43,7 @@ const TASK_MODES = {
     maxIterations: 4,
   },
   general: {
-    toolNames: ['route_stops', 'route_enhancement', 'salesforce_query', 'agent_memory'],
+    toolNames: ['route_stops', 'route_enhancement', 'route_nearby_candidates', 'salesforce_query', 'agent_memory', 'route_edit_proposal', 'map_focus'],
     maxIterations: 3,
   },
   full: {
@@ -74,27 +78,58 @@ function buildContextPrompt(context, recordType, intent) {
   }
 
   const parts = ['\n\n--- ROUTE CONTEXT ---'];
-  parts.push(`Route: ${context.routeName} (${context.routeId})`);
-  if (context.serviceDate) parts.push(`Date: ${context.serviceDate}`);
-  if (context.driver) parts.push(`Driver: ${context.driver}`);
-  if (recordType) parts.push(`Record Type: ${recordType}`);
-  parts.push(`Stops: ${context.stopsCount ?? 0}`);
+  if (context.routeId) {
+    parts.push(`Route: ${context.routeName || '—'} (${context.routeId})`);
+    if (context.serviceDate) parts.push(`Date: ${context.serviceDate}`);
+    if (context.driver) parts.push(`Driver: ${context.driver}`);
+    if (recordType || context.recordType) parts.push(`Record Type: ${recordType || context.recordType}`);
+    parts.push(`Stops: ${context.stopsCount ?? 0}`);
 
-  if (intent?.tier === 'question') {
+    // Ordered stop index so the model can resolve "stop 1", "between the first 2 stops", etc.
+    const stops = Array.isArray(context.stops) ? context.stops : [];
+    if (stops.length) {
+      parts.push('');
+      parts.push('STOP INDEX (priority order):');
+      stops.forEach((s, i) => {
+        const n = s.priority ?? i + 1;
+        parts.push(`  ${n}. ${s.accountName || '—'} (${s.accountId || 'no-id'})`);
+      });
+    }
+  } else if (recordType || context.recordType) {
+    parts.push(`Record Type: ${recordType || context.recordType}`);
+  }
+
+  const focusCandidates = Array.isArray(context.recentFocusCandidates) ? context.recentFocusCandidates : [];
+  if (focusCandidates.length) {
+    parts.push('');
+    parts.push('RECENT FOCUS CANDIDATES (use for "show on the map" when no name is given):');
+    focusCandidates.slice(0, 8).forEach((c, i) => {
+      parts.push(`  ${i + 1}. ${c.accountName || '—'} (${c.accountId || 'no-id'})`);
+    });
+  }
+
+  if (intent?.tier === 'map_focus') {
+    parts.push('Intent: MAP FOCUS — call map_focus to center the UI map on the account.');
+    parts.push('If the user names an account, pass accountName (or accountId). If they say "show on the map" with no name, use the first RECENT FOCUS CANDIDATE.');
+    parts.push('Do NOT call route_edit_proposal. Reply briefly confirming which account was centered.');
+  } else if (intent?.tier === 'question') {
     parts.push('Intent: QUESTION — answer briefly. Use route_stops only if you need stop names/IDs.');
     parts.push('Do NOT call route_edit_proposal or compare_routes unless the user asks to apply a change.');
+    parts.push('If they ask to show something on the map, call map_focus.');
   } else if (intent?.tier === 'actionable') {
     parts.push('Intent: ACTIONABLE EDIT — call route_edit_proposal directly.');
-    parts.push('Use removeAccountNames / addAccountNames when the user names stops by name (matched on Account_Name__c).');
+    parts.push('Use addAccountNames for named adds (Account.Name LIKE %name%) and removeAccountNames for removals.');
     parts.push('Do NOT call compare_routes, multi_route_context, or account_discovery for simple add/remove/assign requests.');
     parts.push('route_edit_proposal shows a manager approval card — only call it when applying a change.');
   } else if (intent?.tier === 'exploratory') {
-    parts.push('Intent: EXPLORATORY — recommend options first; call route_edit_proposal only if user confirms.');
-    parts.push('May use route_enhancement and compare_routes for history-aware suggestions.');
+    parts.push('Intent: EXPLORATORY / ALONG-ROUTE — use route_nearby_candidates for between-stops / along-the-way discovery.');
+    parts.push('Pass fromStopIndex/toStopIndex (1-based from STOP INDEX) or fromAccountName/toAccountName when the user names anchors.');
+    parts.push('Then propose adds with route_edit_proposal.addAccountIds. For a single named account use addAccountNames (LIKE).');
   } else if (intent?.tier === 'redesign') {
     parts.push('Intent: REDESIGN — may use compare_routes and route_enhancement before route_generation or route_edit_proposal.');
   } else {
     parts.push('Answer concisely. Load only the data needed for this request.');
+    parts.push('Named add → route_edit_proposal.addAccountNames. Along-route discovery → route_nearby_candidates then proposal.');
   }
 
   parts.push('--- END CONTEXT ---\n');
@@ -221,6 +256,9 @@ async function runChatJob(jobId, body) {
   }
   if (Array.isArray(result.editProposals) && result.editProposals.length > 0) {
     aiJobs.mergePartialResults(jobId, { editProposals: result.editProposals });
+  }
+  if (Array.isArray(result.mapFocus) && result.mapFocus.length > 0) {
+    aiJobs.mergePartialResults(jobId, { mapFocus: result.mapFocus });
   }
 
   const { staticPrompt, dynamicPrompt } = composeSystemPrompt('chat', { memoryBlock: await buildMemoryContext({ context, recordType }) });
