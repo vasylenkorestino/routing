@@ -1,4 +1,10 @@
+import { useCallback, useState } from 'react';
 import useStore from '../../store';
+import * as routingApi from '../../api/routing';
+import { toast } from '../ui/Toast';
+import { getErrorMessage } from '../../utils/error';
+import { isRouteCompleted } from '../../utils/route';
+import LastServices from '../shared/LastServices';
 import {
   HAZTRACK_STATUS_COLORS,
   LBS_PER_GALLON,
@@ -62,6 +68,42 @@ function ExternalLinkIcon() {
  */
 export default function HazTrackDetailPanel({ tank, onBack }) {
   const sfInstanceUrl = useStore((s) => s.sfInstanceUrl);
+  const routeId = useStore((s) => s.routeId);
+  const route = useStore((s) => s.route);
+  const refreshRoutes = useStore((s) => s.refreshRoutes);
+  const [adding, setAdding] = useState(false);
+
+  const accountId = tank?.AccountId || null;
+  const accountName = tank?.AccountName || tankTitle(tank);
+  const routeCompleted = isRouteCompleted(route);
+  const canAdd = !!(accountId && routeId && !routeCompleted && !adding);
+
+  /** Adds the linked account as a stop on the selected Google_Route__c. */
+  const handleAddToRoute = useCallback(async () => {
+    if (!accountId) {
+      toast.info('No account linked to this tank');
+      return;
+    }
+    if (!routeId) {
+      toast.info('Select a route first');
+      return;
+    }
+    if (isRouteCompleted(route)) {
+      toast.info('Route is completed — stops cannot be added');
+      return;
+    }
+    setAdding(true);
+    try {
+      await routingApi.addPoint({ accountId, routeId, ticketType: '' });
+      await refreshRoutes();
+      toast.success(`Added ${accountName || 'account'} to route`);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setAdding(false);
+    }
+  }, [accountId, accountName, routeId, route, refreshRoutes]);
+
   if (!tank) return null;
 
   const pct = volumePercent(tank);
@@ -75,6 +117,11 @@ export default function HazTrackDetailPanel({ tank, onBack }) {
   const capacityLeft = maxVol != null && lastVol != null ? Math.max(0, maxVol - lastVol) : null;
   const status = tank.LevelStatus || 'Issue';
   const overdueHorizon = (d) => d && d.getTime() < Date.now();
+
+  let addTitle = 'Add this account to the selected route';
+  if (!accountId) addTitle = 'No account linked to this tank';
+  else if (!routeId) addTitle = 'Select a route first';
+  else if (routeCompleted) addTitle = 'Route is completed — stops cannot be added';
 
   return (
     <div className="flex flex-col gap-3 text-txt">
@@ -92,6 +139,28 @@ export default function HazTrackDetailPanel({ tank, onBack }) {
         <h3 className="text-sm font-semibold leading-snug">{tankTitle(tank)}</h3>
         <StatusPill status={status} />
       </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={!canAdd}
+          onClick={handleAddToRoute}
+          title={addTitle}
+          className={`px-3 py-1.5 text-[12px] font-semibold rounded-md text-white transition ${
+            canAdd
+              ? 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer'
+              : 'bg-gray-400 cursor-not-allowed'
+          }`}
+        >
+          {adding ? 'Adding…' : 'Add to Route'}
+        </button>
+      </div>
+
+      {!accountId && (
+        <div className="text-[11px] text-txt-secondary rounded-md border border-border bg-bg/60 px-2.5 py-2">
+          No account linked — cannot show services or add to route.
+        </div>
+      )}
 
       {/* Metrics overview */}
       <div className="flex gap-3 items-stretch">
@@ -197,6 +266,11 @@ export default function HazTrackDetailPanel({ tank, onBack }) {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Last Services — under Sensors, before events */}
+      {accountId && (
+        <LastServices accountId={accountId} accountName={accountName} />
       )}
 
       {/* Most recent events */}
