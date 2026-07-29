@@ -7,9 +7,9 @@ const serviceDue = require('../modules/serviceDue');
 /**
  * Finds accounts that actually need UCO service by the target date.
  * Candidates (UCO_Collection__c = true, active, routable, with coordinates) are
- * evaluated individually by the shared serviceDue engine: UCOLastServiceDate__c
- * (or the newest UCO Service__c) + pickup frequency (declared or estimated from
- * history), with a Gross Gallons fill-rate model against tank capacity.
+ * evaluated individually by the shared serviceDue engine: newest UCO Collection
+ * Service__c + pickup frequency (declared or estimated from history), with a
+ * Gross Gallons fill-rate model against tank capacity.
  */
 class AccountDiscoverySkill extends BaseSkill {
   constructor() {
@@ -19,7 +19,7 @@ class AccountDiscoverySkill extends BaseSkill {
         'Find accounts that need UCO service by the target date. Each candidate ' +
         '(UCO_Collection__c = true, active, not ignored for routing, valid coordinates, ' +
         'not already on an active route) is evaluated individually: last service date ' +
-        '(UCOLastServiceDate__c, falling back to the newest UCO Collection Service__c) ' +
+        '(newest UCO Collection Service__c only) ' +
         'plus pickup frequency (Estimated_Pickup_Frequency__c, falling back to a frequency ' +
         'estimated from service history) must land on or before the target date. ' +
         'Also factors tank capacity (Tank_Size__c) and Gross Gallons collection history. ' +

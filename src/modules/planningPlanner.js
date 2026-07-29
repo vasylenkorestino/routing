@@ -13,8 +13,8 @@
  *
  * Eligibility (planning mode): UCO_Collection__c = true, Account_Status__c =
  * 'Active', valid coordinates, not already routed, and actually due for service
- * per the shared serviceDue engine (UCOLastServiceDate__c + pickup frequency,
- * with Service__c-history fallbacks and a Gross Gallons fill-rate model).
+ * per the shared serviceDue engine (newest UCO Collection Service__c + pickup
+ * frequency, with history-based frequency fallbacks and a Gross Gallons fill-rate model).
  */
 
 const { loadDepots, bearing, sectorFor } = require('./serviceLocationPlanner');
@@ -142,10 +142,10 @@ function decorateAccount(a) {
  * Finds accounts eligible for planning within the range, anchored on the selected
  * Service Location and expanding outward. Candidates are UCO_Collection__c = true
  * accounts not already on an incomplete Route__c in the window; each is then
- * evaluated individually by the shared serviceDue engine (UCOLastServiceDate__c +
- * pickup frequency, with Service__c-history fallbacks) and only accounts actually
- * due by the target date are returned (sorted nearest-first, with the evaluation
- * attached as `_svc`). Accounts filtered out are returned as `exclusions`.
+ * evaluated individually by the shared serviceDue engine (newest UCO Collection
+ * Service__c + pickup frequency, with history-based frequency fallbacks) and only
+ * accounts actually due by the target date are returned (sorted nearest-first,
+ * with the evaluation attached as `_svc`). Accounts filtered out are returned as `exclusions`.
  *
  * @param {object} p
  * @param {{lat:number,lng:number}} [p.anchor] - Service Location coordinates to expand from.

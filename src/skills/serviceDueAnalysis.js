@@ -27,8 +27,8 @@ class ServiceDueAnalysisSkill extends BaseSkill {
         'Determine which UCO Collection accounts actually require service within a date window. ' +
         'ALWAYS run this when deciding which accounts need service or should be included in route ' +
         'planning — do not include accounts it reports as not due. Per account it resolves the last ' +
-        'service date (UCOLastServiceDate__c, falling back to the newest UCO Collection Service__c ' +
-        'record), the pickup frequency (Estimated_Pickup_Frequency__c picklist such as "3 Weeks", ' +
+        'service date (newest UCO Collection Service__c only), the pickup frequency ' +
+        '(Estimated_Pickup_Frequency__c picklist such as "3 Weeks", ' +
         'falling back to Pickup_Frequency_in_Days__c, falling back to a frequency estimated from the ' +
         'account\'s service history), and a Gross Gallons fill-rate model against tank capacity ' +
         '(Tank_Size__c) that can pull service earlier when the tank fills faster than the declared ' +

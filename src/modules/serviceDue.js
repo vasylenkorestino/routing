@@ -5,8 +5,8 @@
  * Used by the Planning Workspace planner, the account_discovery skill and the
  * service_due_analysis skill so every planning path applies the same rules:
  *
- *   last service date : newer of UCOLastServiceDate__c and the newest
- *                       UCO Collection Service__c.Service_Date__c
+ *   last service date : newest UCO Collection Service__c.Service_Date__c only
+ *                       (UCOLastServiceDate__c is ignored for due math)
  *   frequency (days)  : Estimated_Pickup_Frequency__c picklist ("3 Weeks" = 21),
  *                       falling back to Pickup_Frequency_in_Days__c, falling back
  *                       to the median interval of the account's service history
@@ -192,26 +192,12 @@ function estimateFillRate(services) {
 }
 
 /**
- * Last UCO service date: newer of UCOLastServiceDate__c and newest UCO Service__c.
- * Prevents stale account fields from inventing multi-year overdue ADD candidates.
+ * Last UCO service date: newest UCO Collection Service__c only.
+ * UCOLastServiceDate__c is ignored (can be stale). Empty history → null.
  * Returns { date, source } or null.
  */
 function resolveLastServiceDate(account, services = extractServiceHistory(account)) {
-  const fieldDate = account?.UCOLastServiceDate__c
-    ? String(account.UCOLastServiceDate__c).slice(0, 10)
-    : null;
   const historyDate = services.length > 0 ? services[0].date : null;
-
-  if (fieldDate && historyDate) {
-    if (historyDate > fieldDate) {
-      return { date: historyDate, source: 'service_history' };
-    }
-    if (fieldDate > historyDate) {
-      return { date: fieldDate, source: 'uco_last_service_date' };
-    }
-    return { date: fieldDate, source: 'max_of_field_and_history' };
-  }
-  if (fieldDate) return { date: fieldDate, source: 'uco_last_service_date' };
   if (historyDate) return { date: historyDate, source: 'service_history' };
   return null;
 }

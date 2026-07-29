@@ -135,23 +135,22 @@ test('fill rate needs 2+ dates and at least one positive gallons reading', () =>
 
 /* ── last service date resolution ─────────────────────────── */
 
-test('uses the newer of UCOLastServiceDate__c and Service__c history', () => {
+test('uses newest UCO Collection Service__c only (ignores UCOLastServiceDate__c)', () => {
   assert.deepEqual(
     resolveLastServiceDate({ UCOLastServiceDate__c: '2026-06-15', Services__r: services(['2026-06-20', 50]) }),
     { date: '2026-06-20', source: 'service_history' },
   );
+  // Field newer than history — still use history.
   assert.deepEqual(
     resolveLastServiceDate({ UCOLastServiceDate__c: '2026-06-25', Services__r: services(['2026-06-20', 50]) }),
-    { date: '2026-06-25', source: 'uco_last_service_date' },
-  );
-  assert.deepEqual(
-    resolveLastServiceDate({ UCOLastServiceDate__c: '2026-06-20', Services__r: services(['2026-06-20', 50]) }),
-    { date: '2026-06-20', source: 'max_of_field_and_history' },
+    { date: '2026-06-20', source: 'service_history' },
   );
   assert.deepEqual(
     resolveLastServiceDate({ Services__r: services(['2026-06-20', 50], ['2026-05-20', 40]) }),
     { date: '2026-06-20', source: 'service_history' },
   );
+  // Field-only → null (no history fallback).
+  assert.equal(resolveLastServiceDate({ UCOLastServiceDate__c: '2026-06-20' }), null);
   assert.equal(resolveLastServiceDate({}), null);
 });
 
@@ -173,7 +172,10 @@ test('stale UCOLastServiceDate__c does not invent multi-year overdue (Wings & Mo
 /* ── evaluateAccount: due / not-due boundaries ────────────── */
 
 test('due exactly when last service + frequency lands on the target date', () => {
-  const acct = { UCOLastServiceDate__c: '2026-06-19', Estimated_Pickup_Frequency__c: '3 Weeks' };
+  const acct = {
+    Estimated_Pickup_Frequency__c: '3 Weeks',
+    Services__r: services(['2026-06-19', 50]),
+  };
   const onDue = evaluateAccount(acct, '2026-07-10'); // 06-19 + 21d = 07-10
   assert.equal(onDue.due, true);
   assert.equal(onDue.nextDueDate, '2026-07-10');
@@ -184,19 +186,25 @@ test('due exactly when last service + frequency lands on the target date', () =>
 
 test('a "3 Weeks" account serviced a week ago is NOT due (old parser bug)', () => {
   const res = evaluateAccount(
-    { UCOLastServiceDate__c: '2026-07-03', Estimated_Pickup_Frequency__c: '3 Weeks' },
+    {
+      Estimated_Pickup_Frequency__c: '3 Weeks',
+      Services__r: services(['2026-07-03', 50]),
+    },
     '2026-07-10',
   );
   assert.equal(res.due, false);
 });
 
 test('date-range window: due when nextDueDate falls within [dateFrom, dateTo]', () => {
-  const acct = { UCOLastServiceDate__c: '2026-06-25', Estimated_Pickup_Frequency__c: '2 Weeks' }; // due 07-09
+  const acct = {
+    Estimated_Pickup_Frequency__c: '2 Weeks',
+    Services__r: services(['2026-06-25', 50]),
+  }; // due 07-09
   assert.equal(evaluateAccount(acct, '2026-07-06', '2026-07-12').due, true);
   assert.equal(evaluateAccount(acct, '2026-07-06', '2026-07-08').due, false);
 });
 
-test('falls back to Service__c history when UCOLastServiceDate__c is empty', () => {
+test('uses Service__c history for last service date', () => {
   const res = evaluateAccount(
     { Estimated_Pickup_Frequency__c: '2 Weeks', Services__r: services(['2026-06-20', 45], ['2026-06-01', 40]) },
     '2026-07-10',
@@ -204,6 +212,16 @@ test('falls back to Service__c history when UCOLastServiceDate__c is empty', () 
   assert.equal(res.lastServiceDate, '2026-06-20');
   assert.equal(res.lastDateSource, 'service_history');
   assert.equal(res.due, true); // 06-20 + 14d = 07-04 <= 07-10
+});
+
+test('field-only account with no history is not due', () => {
+  const res = evaluateAccount(
+    { UCOLastServiceDate__c: '2026-06-19', Estimated_Pickup_Frequency__c: '3 Weeks' },
+    '2026-07-10',
+  );
+  assert.equal(res.due, false);
+  assert.equal(res.reason, 'no_last_service_date');
+  assert.equal(res.lastServiceDate, null);
 });
 
 test('estimates frequency from history when both frequency fields are empty', () => {
@@ -287,12 +305,16 @@ test('estimated gallons = fill rate x days since last service, capped at capacit
 
 test('gallons estimation falls back to GPM accrual, last collection, then default', () => {
   const gpm = estimateGallonsAtDate(
-    { UCOLastServiceDate__c: '2026-06-10', Estimated_GPM__c: '30', Tank_Size__c: '100 Gallon' },
+    {
+      Estimated_GPM__c: '30',
+      Tank_Size__c: '100 Gallon',
+      Services__r: services(['2026-06-10', null]),
+    },
     '2026-07-10',
   );
   assert.equal(gpm, 30); // 1 month x 30 GPM
   const lastCollection = estimateGallonsAtDate(
-    { UCOLastServiceDate__c: '2026-06-10', Services__r: services(['2026-06-10', 55]) },
+    { Services__r: services(['2026-06-10', 55]) },
     '2026-07-10',
   );
   assert.equal(lastCollection, 55);

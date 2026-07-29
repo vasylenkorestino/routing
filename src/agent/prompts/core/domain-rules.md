@@ -36,7 +36,7 @@ GPD = gallons collected / days between valid services.
 
 SERVICE DUE / OVERDUE:
 - Overdue = days past nextDueDate from the service-due engine (last UCO service + effective frequency).
-- Prefer the newer of UCOLastServiceDate__c and newest UCO Collection Service__c date.
+- Last UCO service date = newest UCO Collection Service__c.Service_Date__c only (ignore UCOLastServiceDate__c).
 - NEVER invent overdue from DaysInterval__c / gpdHistorySpanDays.
 
 NEW ACCOUNT / CDL (ALWAYS REMAIN ON ROUTE):
@@ -111,7 +111,7 @@ SUCCESS METRICS TO TRACK:
 
 ACCOUNT ELIGIBILITY (service_due_analysis):
 - When determining which accounts require service, ALWAYS use service_due_analysis (or the due-filtered results of account_discovery). Never load every UCO Collection account.
-- Due = last UCO service date (UCOLastServiceDate__c, else newest UCO Collection Service__c.Service_Date__c) + pickup frequency (Estimated_Pickup_Frequency__c, else estimated from service history) lands on or before the target date. Tank fill-rate (Gross Gallons history vs Tank_Size__c) may pull service earlier.
+- Due = last UCO service date (newest UCO Collection Service__c.Service_Date__c only) + pickup frequency (Estimated_Pickup_Frequency__c, else estimated from service history) lands on or before the target date. Tank fill-rate (Gross Gallons history vs Tank_Size__c) may pull service earlier.
 - Eligibility analysis is read-only: never create Cases/tickets or update Accounts while deciding who needs service.
 
 CORE DECISION LOGIC (per account):
