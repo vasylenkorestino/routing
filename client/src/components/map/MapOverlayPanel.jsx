@@ -5,12 +5,20 @@ import * as routingApi from '../../api/routing';
 import RouteList from '../layers/RouteList';
 import TicketList from '../layers/TicketList';
 import ShapeList from '../layers/ShapeList';
+import HazTrackList from '../layers/HazTrackList';
+import HazTrackDetailPanel from './HazTrackDetailPanel';
 import AccountTicketSearch from '../shared/AccountTicketSearch';
 import Spinner from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 
-const TABS = ['routes', 'tickets', 'shapes'];
+const TABS = ['routes', 'tickets', 'shapes', 'haztrack'];
+const TAB_LABELS = {
+  routes: 'Routes',
+  tickets: 'Tickets',
+  shapes: 'Shapes',
+  haztrack: 'HazTrack',
+};
 
 /** Bounding-box padding around route stops (~20 miles). */
 const ROUTE_BBOX_PAD = 0.3;
@@ -54,7 +62,7 @@ async function pollAIJob(jobId, { intervalMs = 2000, timeoutMs = 180000 } = {}) 
 const PANEL_MIN_WIDTH = 300;
 const PANEL_MAX_WIDTH = 760;
 
-/** Docked, full-height, resizable side panel on the map — routes/tickets/shapes */
+/** Docked, full-height, resizable side panel on the map — routes/tickets/shapes/HazTrack */
 export default function MapOverlayPanel() {
   const [open, setOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(380);
@@ -96,6 +104,9 @@ export default function MapOverlayPanel() {
   const resetTicketTypeVisibility = useStore((st) => st.resetTicketTypeVisibility);
   const setTicketCandidates = useStore((st) => st.setTicketCandidates);
   const hasCandidates = useStore((st) => !!(st.routeId && st.ticketCandidates[st.routeId]));
+  const selectedHazTrackId = useStore((st) => st.selectedHazTrackId);
+  const clearSelectedHazTrack = useStore((st) => st.clearSelectedHazTrack);
+  const selectedHazTrack = layers.haztrack?.data?.find((t) => t.Id === selectedHazTrackId) || null;
 
   // BBoxes already fetched this session, per ticket type — skips redundant viewport fetches.
   const fetchedBoxes = useRef([]);
@@ -182,6 +193,21 @@ export default function MapOverlayPanel() {
     }
   }, [recordType, setLayerData]);
 
+  /** Loads all HazTrack tanks when the layer is empty. */
+  const ensureHazTrackLoaded = useCallback(async ({ quiet = false } = {}) => {
+    if (useStore.getState().layers.haztrack?.data?.length > 0) return;
+    if (!quiet) setLayerLoading(true);
+    try {
+      const data = await routingApi.getHazTrackData();
+      const tanks = Array.isArray(data) ? data : [];
+      setLayerData('haztrack', tanks);
+    } catch (err) {
+      toast.error(getErrorMessage(err) || 'Failed to load HazTrack tanks');
+    } finally {
+      if (!quiet) setLayerLoading(false);
+    }
+  }, [setLayerData]);
+
   /**
    * Eye icon: show/hide the layer on the map without switching tabs.
    * Turning a layer on also lazy-loads its data when empty.
@@ -195,8 +221,9 @@ export default function MapOverlayPanel() {
     }
     if (tab === 'tickets') await ensureTicketsLoaded({ quiet: true });
     if (tab === 'shapes') await ensureShapesLoaded({ quiet: true });
+    if (tab === 'haztrack') await ensureHazTrackLoaded({ quiet: true });
     setLayerVisible(tab, true);
-  }, [ensureTicketsLoaded, ensureShapesLoaded, setLayerVisible]);
+  }, [ensureTicketsLoaded, ensureShapesLoaded, ensureHazTrackLoaded, setLayerVisible]);
 
   /* Initial loads when a tab is opened */
   useEffect(() => {
@@ -219,8 +246,18 @@ export default function MapOverlayPanel() {
         if (!useStore.getState().layers.shapes.visible) setLayerVisible('shapes', true);
       });
     }
+    if (selectedLayerTab === 'haztrack' && (layers.haztrack?.data?.length || 0) === 0) {
+      ensureHazTrackLoaded().then(() => {
+        if (!useStore.getState().layers.haztrack.visible) setLayerVisible('haztrack', true);
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLayerTab, open, routeId]);
+
+  /* Open the panel when a HazTrack tank is selected (marker or list). */
+  useEffect(() => {
+    if (selectedHazTrackId) setOpen(true);
+  }, [selectedHazTrackId]);
 
   /* Progressive loading — pan/zoom pulls the currently-visible ticket types for the visible area */
   useEffect(() => {
@@ -306,25 +343,25 @@ export default function MapOverlayPanel() {
           {/* Tabs */}
           <div className="flex border-b border-border shrink-0">
             {TABS.map((tab) => {
-              const count = layers[tab].data.length;
+              const count = layers[tab]?.data?.length || 0;
               return (
                 <button
                   key={tab}
-                  className={`flex-1 py-2 text-center text-[12px] font-medium transition -mb-px border-b-2 ${
+                  className={`flex-1 py-2 text-center text-[11px] font-medium transition -mb-px border-b-2 ${
                     selectedLayerTab === tab
                       ? 'text-primary border-primary'
                       : 'text-txt-secondary border-transparent hover:text-txt'
                   }`}
                   onClick={() => setSelectedLayerTab(tab)}
                 >
-                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                  {count > 0 && <span className="ml-1 text-[10px] text-txt-secondary">({count})</span>}
+                  {TAB_LABELS[tab] || tab}
+                  {count > 0 && <span className="ml-0.5 text-[10px] text-txt-secondary">({count})</span>}
                   <span
-                    className={`ml-1 cursor-pointer text-xs transition-opacity ${layers[tab].visible ? 'opacity-100' : 'opacity-30'}`}
+                    className={`ml-0.5 cursor-pointer text-xs transition-opacity ${layers[tab]?.visible ? 'opacity-100' : 'opacity-30'}`}
                     onClick={(e) => handleEyeClick(tab, e)}
-                    title={layers[tab].visible ? 'Hide on map' : 'Show on map (without switching tab)'}
+                    title={layers[tab]?.visible ? 'Hide on map' : 'Show on map (without switching tab)'}
                   >
-                    {layers[tab].visible ? '👁' : '👁‍🗨'}
+                    {layers[tab]?.visible ? '👁' : '👁‍🗨'}
                   </span>
                 </button>
               );
@@ -382,6 +419,16 @@ export default function MapOverlayPanel() {
                   </div>
                 )}
                 {selectedLayerTab === 'shapes' && <ShapeList shapes={layers.shapes.data} />}
+                {selectedLayerTab === 'haztrack' && (
+                  selectedHazTrack ? (
+                    <HazTrackDetailPanel
+                      tank={selectedHazTrack}
+                      onBack={clearSelectedHazTrack}
+                    />
+                  ) : (
+                    <HazTrackList tanks={layers.haztrack?.data || []} />
+                  )
+                )}
               </>
             )}
           </div>

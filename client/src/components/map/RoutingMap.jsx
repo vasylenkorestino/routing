@@ -13,6 +13,8 @@ import MapFocusMarker from './MapFocusMarker';
 import MapOverlayPanel from './MapOverlayPanel';
 import MapLegend from './MapLegend';
 import RouteLogLegend from './RouteLogLegend';
+import HazTrackLayer from './HazTrackLayer';
+import HazTrackLegend from './HazTrackLegend';
 
 const LIBRARIES = ['geometry'];
 
@@ -146,6 +148,7 @@ export default function RoutingMap() {
       {layers.tickets.visible && <TicketLayer tickets={layers.tickets.data} />}
       {routeId && !compareMode && <RouteLogLayer />}
       {layers.shapes.visible && <ShapeLayer ref={shapeLayerRef} shapes={layers.shapes.data} />}
+      {layers.haztrack.visible && <HazTrackLayer />}
       <ShapeAccountLayer />
       <MapFocusMarker />
 
@@ -196,6 +199,7 @@ export default function RoutingMap() {
     {/* AI flag layers + stop status legends — hidden in compare mode */}
     {routeId && !compareMode && <RouteLogLegend />}
     {layers.routes.visible && !compareMode && <MapLegend />}
+    {layers.haztrack.visible && <HazTrackLegend />}
     {editingShapeId && <ShapeEditPanel shapeLayerRef={shapeLayerRef} />}
     <ShapeActionsModal />
     </div>

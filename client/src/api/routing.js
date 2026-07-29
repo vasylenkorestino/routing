@@ -35,6 +35,7 @@ export const generateRouteByShape = (body) => client.post('/routing/generate-rou
 /* ── Lookup / search ─────────────────────────────────────── */
 export const getLastServices = (accountId) => client.get(`/routing/last-services/${accountId}`).then((r) => r.data);
 export const getTankSensorData = (accountId) => client.get(`/routing/tank-sensor-data/${accountId}`).then((r) => r.data);
+export const getHazTrackData = () => client.get('/routing/haztrack-data').then((r) => r.data);
 export const searchAccounts = (params) => client.get('/routing/search-accounts', { params }).then((r) => r.data);
 export const getWaypoints = (params) => client.get('/routing/waypoints', { params }).then((r) => r.data);
 export const getMapData = (params) => client.get('/routing/map-data', { params }).then((r) => r.data);

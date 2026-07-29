@@ -26,10 +26,13 @@ const mapSlice = (set, get) => ({
     routes: { visible: true, data: [] },
     tickets: { visible: false, data: [] },
     shapes: { visible: false, data: [] },
+    haztrack: { visible: false, data: [] },
   },
   hiddenRouteIds: {},
   selectedLayerTab: 'routes',
   selectedShapeId: null,
+  /** Selected HazTrack tank Id (opens detail + InfoWindow). */
+  selectedHazTrackId: null,
   mapCenter: { lat: 33.749, lng: -84.388 },
   mapZoom: 7,
   /** Account Id to focus on the map (opens ticket info window when layer is visible) */
@@ -224,6 +227,26 @@ const mapSlice = (set, get) => ({
   setSelectedShapeId: (selectedShapeId) => set({ selectedShapeId }),
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapZoom: (mapZoom) => set({ mapZoom }),
+
+  /** Selects a HazTrack tank, pans the map when it has coords, and shows the layer. */
+  selectHazTrack: (tank) => {
+    if (!tank?.Id) return;
+    const lat = Number(tank.MALatitude);
+    const lng = Number(tank.MALongitude);
+    const hasLoc = Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)
+      && (tank.hasLocation !== false);
+    set((s) => ({
+      selectedHazTrackId: tank.Id,
+      selectedLayerTab: 'haztrack',
+      ...(hasLoc ? { mapCenter: { lat, lng }, mapZoom: Math.max(s.mapZoom || 7, 14) } : {}),
+      layers: {
+        ...s.layers,
+        haztrack: { ...(s.layers.haztrack || { data: [] }), visible: true },
+      },
+    }));
+  },
+
+  clearSelectedHazTrack: () => set({ selectedHazTrackId: null }),
 
   /** Shape clicked on the map — opens Edit / Show Accounts menu. */
   shapeActionsTarget: null,

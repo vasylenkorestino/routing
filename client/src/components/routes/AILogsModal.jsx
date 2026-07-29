@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import useStore from '../../store';
 import * as routingApi from '../../api/routing';
 import Spinner from '../ui/Spinner';
+import DeclineCommentModal from '../ui/DeclineCommentModal';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 import LastServices from '../shared/LastServices';
@@ -189,16 +190,41 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     }
   }, [setMapCenter, setMapZoom, setRouteLogFocusedId]);
 
+  const [declinePrompt, setDeclinePrompt] = useState(null); // { items, title, message }
+  const [declineSaving, setDeclineSaving] = useState(false);
+
   const applyResolutions = useCallback(async (items) => {
-    if (!items.length) return;
+    if (!items.length) return false;
     try {
       await resolveRouteLogs(items);
+      return true;
     } catch (err) {
       toast.error(getErrorMessage(err));
+      return false;
     }
   }, [resolveRouteLogs]);
 
+  /** Builds decline resolution items for the given logs (FLAG/OVERFLOW use membership fallback). */
+  const buildDeclineItems = useCallback((targets) => targets.map((l) => {
+    let outcome = decide(l.flag, 'decline');
+    if (!outcome) {
+      const inRoute = !!l.Account__c && routeAccountIds.has(l.Account__c);
+      outcome = inRoute ? 'remove' : 'ignore';
+    }
+    return { logId: l.Id, outcome, accountName: l.Account__r?.Name || l.Name };
+  }), [routeAccountIds]);
+
   const decideOne = (log, decision) => {
+    if (decision === 'decline') {
+      const items = buildDeclineItems([log]);
+      if (!items.length) return;
+      setDeclinePrompt({
+        items,
+        title: 'Decline recommendation',
+        message: `Optionally explain why you are declining the suggestion for "${items[0].accountName}".`,
+      });
+      return;
+    }
     const outcome = decide(log.flag, decision);
     if (!outcome) return;
     applyResolutions([{ logId: log.Id, outcome }]);
@@ -221,10 +247,21 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
   const bulkDecide = (decision) => {
     const hasSelection = pendingVisible.some((l) => selectedIds[l.Id]);
     const targets = hasSelection ? pendingVisible.filter((l) => selectedIds[l.Id]) : pendingVisible;
+    if (decision === 'decline') {
+      const items = buildDeclineItems(targets);
+      if (!items.length) return;
+      setDeclinePrompt({
+        items,
+        title: items.length === 1 ? 'Decline recommendation' : `Decline ${items.length} recommendations`,
+        message: items.length === 1
+          ? `Optionally explain why you are declining the suggestion for "${items[0].accountName}".`
+          : 'Optionally leave one note — it will be saved on each declined log.',
+      });
+      return;
+    }
     const items = targets.map((l) => {
       let outcome = decide(l.flag, decision);
       if (!outcome) {
-        // FLAG / OVERFLOW — fall back to membership-based resolution.
         const inRoute = !!l.Account__c && routeAccountIds.has(l.Account__c);
         outcome = decision === 'approve' ? (inRoute ? 'keep' : 'add') : (inRoute ? 'remove' : 'ignore');
       }
@@ -232,6 +269,25 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     });
     applyResolutions(items);
   };
+
+  /** Confirms decline (with optional comment) from the prompt modal. */
+  const confirmDecline = useCallback(async (comment) => {
+    if (!declinePrompt?.items?.length) return;
+    setDeclineSaving(true);
+    try {
+      const note = comment || '';
+      const ok = await applyResolutions(declinePrompt.items.map(({ logId, outcome }) => ({
+        logId,
+        outcome,
+        ...(note ? { comment: note } : {}),
+      })));
+      if (!ok) return;
+      setDeclinePrompt(null);
+      toast.success(declinePrompt.items.length === 1 ? 'Declined' : `Declined ${declinePrompt.items.length} recommendations`);
+    } finally {
+      setDeclineSaving(false);
+    }
+  }, [declinePrompt, applyResolutions]);
 
   const showBody = isModal || !collapsed;
 
@@ -407,17 +463,36 @@ export default function AILogsModal({ googleRouteId, routeName, variant = 'embed
     </>
   );
 
+  const declineModal = (
+    <DeclineCommentModal
+      open={!!declinePrompt}
+      title={declinePrompt?.title}
+      message={declinePrompt?.message}
+      loading={declineSaving}
+      onConfirm={confirmDecline}
+      onCancel={() => !declineSaving && setDeclinePrompt(null)}
+    />
+  );
+
   if (isModal) {
     return (
-      <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/40" onClick={onTogglePop}>
-        <div className="w-[820px] max-w-[96vw] max-h-[88vh] bg-surface rounded-xl shadow-2xl flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
-          {inner}
+      <>
+        <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/40" onClick={onTogglePop}>
+          <div className="w-[820px] max-w-[96vw] max-h-[88vh] bg-surface rounded-xl shadow-2xl flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            {inner}
+          </div>
         </div>
-      </div>
+        {declineModal}
+      </>
     );
   }
 
-  return <div className="bg-surface border border-border rounded-lg flex flex-col overflow-hidden">{inner}</div>;
+  return (
+    <>
+      <div className="bg-surface border border-border rounded-lg flex flex-col overflow-hidden">{inner}</div>
+      {declineModal}
+    </>
+  );
 }
 
 const RESOLUTION_OPTIONS = {
@@ -428,12 +503,14 @@ const RESOLUTION_OPTIONS = {
 };
 
 function LogCard({ log, inRoute, selected, mapFocused, approving, commentsOpen, detailOpen, detailTab, onToggleSelect, onDecide, onResolve, onUndo, onToggleComments, onOpen, onDetailTab }) {
+  const sfInstanceUrl = useStore((s) => s.sfInstanceUrl);
   const meta = FLAG_META[log.flag] || FLAG_META.FLAG;
   const isPending = log.Status__c === 'Proposed';
   const needsResolution = NEEDS_RESOLUTION.has(log.flag);
   const approveOutcome = decide(log.flag, 'approve');
   const declineOutcome = decide(log.flag, 'decline');
   const clickable = !!log.Account__c;
+  const accountHref = sfInstanceUrl && log.Account__c ? `${sfInstanceUrl}/${log.Account__c}` : null;
   const resolutionKeys = inRoute ? ['keep', 'remove'] : ['add'];
   const isActive = detailOpen || mapFocused;
   const ring = isActive
@@ -458,7 +535,19 @@ function LogCard({ log, inRoute, selected, mapFocused, approving, commentsOpen, 
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className={`text-[11px] font-medium text-txt ${clickable ? 'group-hover:text-primary' : ''}`}>{log.Account__r?.Name || log.Name}</span>
+            {accountHref ? (
+              <a
+                href={accountHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-medium text-primary hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {log.Account__r?.Name || log.Name}
+              </a>
+            ) : (
+              <span className={`text-[11px] font-medium text-txt ${clickable ? 'group-hover:text-primary' : ''}`}>{log.Account__r?.Name || log.Name}</span>
+            )}
             {log.Confidence__c != null && (
               <span className="text-[9px] text-txt-secondary bg-bg px-1 py-0.5 rounded tabular-nums">{Math.round(log.Confidence__c * 100)}%</span>
             )}

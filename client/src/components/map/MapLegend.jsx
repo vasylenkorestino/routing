@@ -13,19 +13,24 @@ export default function MapLegend() {
   const routeId = useStore((s) => s.routeId);
   const routeLogs = useStore((s) => s.routeLogs);
   const routeLogsRouteId = useStore((s) => s.routeLogsRouteId);
+  const haztrackVisible = useStore((s) => !!s.layers.haztrack?.visible);
 
   const hasAiFlags = useMemo(() => {
     if (!routeId || routeLogsRouteId !== routeId) return false;
     return routeLogs.some((l) => l.Status__c === 'Proposed' && parseReason(l.Reason__c).flag);
   }, [routeId, routeLogsRouteId, routeLogs]);
 
-  const pos = hasAiFlags ? 'left-[11.5rem]' : 'left-2';
+  // Shift right for AI flags; shift up when HazTrack legend occupies bottom-left.
+  const pos = [
+    hasAiFlags ? 'left-[11.5rem]' : 'left-2',
+    haztrackVisible ? 'bottom-16' : 'bottom-6',
+  ].join(' ');
 
   if (!open) {
     return (
       <button
         type="button"
-        className={`absolute bottom-6 ${pos} z-10 flex items-center gap-1.5 px-2.5 py-1.5 bg-surface/95 border border-border rounded-lg shadow-md text-[11px] font-medium text-txt-secondary hover:text-txt hover:bg-surface transition`}
+        className={`absolute ${pos} z-10 flex items-center gap-1.5 px-2.5 py-1.5 bg-surface/95 border border-border rounded-lg shadow-md text-[11px] font-medium text-txt-secondary hover:text-txt hover:bg-surface transition`}
         onClick={() => setOpen(true)}
         title="Show stop status legend"
       >
@@ -44,7 +49,7 @@ export default function MapLegend() {
   }
 
   return (
-    <div className={`absolute bottom-6 ${pos} z-10 bg-surface/95 border border-border rounded-lg shadow-md px-3 py-2`}>
+    <div className={`absolute ${pos} z-10 bg-surface/95 border border-border rounded-lg shadow-md px-3 py-2`}>
       <div className="flex items-center gap-3 mb-1.5">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-txt-secondary">Stops</span>
         <button

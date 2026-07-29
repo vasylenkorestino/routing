@@ -113,6 +113,11 @@ router.get('/tank-sensor-data/:accountId', wrap(async (req, res) => {
   res.json(await apexGet(conn, 'tank-sensor-data', { accountId: req.params.accountId }));
 }));
 
+router.get('/haztrack-data', wrap(async (req, res) => {
+  const conn = await getSalesforceConnection();
+  res.json(await apexGet(conn, 'haztrack-data'));
+}));
+
 router.get('/search-accounts', wrap(async (req, res) => {
   const conn = await getSalesforceConnection();
   res.json(await apexGet(conn, 'search-accounts', req.query));

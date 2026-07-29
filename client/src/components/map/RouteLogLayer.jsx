@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback, useEffect } from 'react';
 import { Marker, InfoWindow } from '@react-google-maps/api';
 import useStore from '../../store';
 import { toast } from '../ui/Toast';
+import DeclineCommentModal from '../ui/DeclineCommentModal';
 import { getErrorMessage } from '../../utils/error';
 import {
   FLAG_META,
@@ -46,6 +47,8 @@ export default function RouteLogLayer() {
   const setFocusedId = useStore((s) => s.setRouteLogFocusedId);
   const route = useStore((s) => s.route);
   const [popupId, setPopupId] = useState(null);
+  const [declineLog, setDeclineLog] = useState(null);
+  const [declineSaving, setDeclineSaving] = useState(false);
   const hasSelection = Object.keys(selectedIds).length > 0;
 
   const routeAccountIds = useMemo(() => {
@@ -81,6 +84,10 @@ export default function RouteLogLayer() {
   }, [popupId, popup]);
 
   const handleAction = useCallback(async (log, decisionOrOutcome, isOutcome = false) => {
+    if (!isOutcome && decisionOrOutcome === 'decline') {
+      setDeclineLog(log);
+      return;
+    }
     const outcome = isOutcome ? decisionOrOutcome : decide(log.flag, decisionOrOutcome);
     if (!outcome) return;
     try {
@@ -92,6 +99,31 @@ export default function RouteLogLayer() {
     }
   }, [resolveRouteLog]);
 
+  /** Confirms map-popup decline with an optional manager comment. */
+  const confirmDecline = useCallback(async (comment) => {
+    if (!declineLog) return;
+    const outcome = decide(declineLog.flag, 'decline');
+    if (!outcome) {
+      setDeclineLog(null);
+      return;
+    }
+    setDeclineSaving(true);
+    try {
+      await resolveRouteLog({
+        logId: declineLog.Id,
+        outcome,
+        ...(comment ? { comment } : {}),
+      });
+      setPopupId(declineLog.Id);
+      setDeclineLog(null);
+      toast.success('Declined');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDeclineSaving(false);
+    }
+  }, [declineLog, resolveRouteLog]);
+
   const handleUndo = useCallback(async (log) => {
     try {
       await undoRouteLog(log.Id);
@@ -102,7 +134,9 @@ export default function RouteLogLayer() {
     }
   }, [undoRouteLog]);
 
-  if (!pending.length && !popup) return null;
+  if (!pending.length && !popup && !declineLog) return null;
+
+  const accountLabel = declineLog?.Account__r?.Name || declineLog?.Name || 'this stop';
 
   return (
     <>
@@ -142,15 +176,26 @@ export default function RouteLogLayer() {
           />
         </InfoWindow>
       )}
+
+      <DeclineCommentModal
+        open={!!declineLog}
+        title="Decline recommendation"
+        message={`Optionally explain why you are declining the suggestion for "${accountLabel}".`}
+        loading={declineSaving}
+        onConfirm={confirmDecline}
+        onCancel={() => !declineSaving && setDeclineLog(null)}
+      />
     </>
   );
 }
 
 /** Compact InfoWindow content for a pending or just-resolved AI route log. */
 function RouteLogPopup({ log, inRoute, approving, selected, onToggleSelect, onAction, onUndo }) {
+  const sfInstanceUrl = useStore((s) => s.sfInstanceUrl);
   const meta = FLAG_META[log.flag] || FLAG_META.FLAG;
   const needsResolution = NEEDS_RESOLUTION.has(log.flag);
   const isPending = log.Status__c === 'Proposed';
+  const accountHref = sfInstanceUrl && log.Account__c ? `${sfInstanceUrl}/${log.Account__c}` : null;
   const btnStyle = {
     height: 26,
     padding: '0 8px',
@@ -202,9 +247,23 @@ function RouteLogPopup({ log, inRoute, approving, selected, onToggleSelect, onAc
           </button>
         )}
       </div>
-      <div style={{ fontWeight: 600, marginBottom: 4 }}>
-        {log.Account__r?.Name || 'Account'}
-      </div>
+      {accountHref ? (
+        <a
+          href={accountHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontWeight: 600, color: '#2563eb', marginBottom: 4, display: 'block', textDecoration: 'none' }}
+          onMouseEnter={(e) => { e.target.style.textDecoration = 'underline'; }}
+          onMouseLeave={(e) => { e.target.style.textDecoration = 'none'; }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {log.Account__r?.Name || 'Account'}
+        </a>
+      ) : (
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>
+          {log.Account__r?.Name || 'Account'}
+        </div>
+      )}
       <p style={{ fontSize: 12, color: '#555', lineHeight: 1.4, margin: '0 0 10px' }}>
         {log.text || 'No AI reason provided.'}
       </p>
