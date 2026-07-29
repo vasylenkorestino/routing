@@ -99,7 +99,7 @@ const routeLogsSlice = (set, get) => ({
     }));
   },
 
-  /** Applies a batch of { logId, outcome } resolutions and patches local state. */
+  /** Applies a batch of { logId, outcome, comment? } resolutions and patches local state. */
   resolveRouteLogs: async (items) => {
     if (!items?.length) return null;
     const ids = items.map((i) => i.logId);
@@ -109,19 +109,34 @@ const routeLogsSlice = (set, get) => ({
       return { routeLogsApproving: next };
     });
     try {
-      const res = await routingApi.approveRouteLogs({ resolutions: items });
+      const payload = items.map(({ logId, outcome, comment }) => ({
+        logId,
+        outcome,
+        ...(comment ? { comment } : {}),
+      }));
+      const res = await routingApi.approveRouteLogs({ resolutions: payload });
       const now = new Date().toISOString();
-      const byId = Object.fromEntries(items.map((i) => [i.logId, i.outcome]));
+      const byId = Object.fromEntries(items.map((i) => [i.logId, i]));
       const driverName = get().driver?.name || 'You';
       set((s) => {
         const selected = { ...s.routeLogSelectedIds };
         ids.forEach((id) => { delete selected[id]; });
         return {
           routeLogs: s.routeLogs.map((l) => {
-            const outcome = byId[l.Id];
-            if (!outcome) return l;
-            const st = outcome === 'add' || outcome === 'keep' ? 'Accepted' : 'Declined';
-            return { ...l, Status__c: st, Accepted_By__c: driverName, Accepted_Date__c: now, _outcome: outcome };
+            const item = byId[l.Id];
+            if (!item) return l;
+            const st = item.outcome === 'add' || item.outcome === 'keep' ? 'Accepted' : 'Declined';
+            const next = {
+              ...l,
+              Status__c: st,
+              Accepted_By__c: driverName,
+              Accepted_Date__c: now,
+              _outcome: item.outcome,
+            };
+            if (item.comment) {
+              next.CommentCount__c = (Number(l.CommentCount__c) || 0) + 1;
+            }
+            return next;
           }),
           routeLogSelectedIds: selected,
           routeLogFocusedId: ids.includes(s.routeLogFocusedId) ? null : s.routeLogFocusedId,
@@ -139,7 +154,7 @@ const routeLogsSlice = (set, get) => ({
   },
 
   /** Convenience wrapper for a single log resolution. */
-  resolveRouteLog: async ({ logId, outcome }) => get().resolveRouteLogs([{ logId, outcome }]),
+  resolveRouteLog: async ({ logId, outcome, comment }) => get().resolveRouteLogs([{ logId, outcome, comment }]),
 
   /**
    * Undoes accept/decline for the given log ids — restores Proposed and reverses

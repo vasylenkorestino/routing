@@ -3,6 +3,7 @@ import useStore from '../../store';
 import * as routingApi from '../../api/routing';
 import AccountTicketSearch from '../shared/AccountTicketSearch';
 import { OverlaySpinner } from '../ui/Spinner';
+import ConfirmModal from '../ui/ConfirmModal';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 import { isRouteCompleted } from '../../utils/route';
@@ -22,6 +23,8 @@ export default function RouteCard({ route }) {
   const drivers = useStore((st) => st.drivers);
   const [optimizing, setOptimizing] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const enhanceRunning = enhancing
     || (aiJobType === 'enhance' && (aiJobStatus === 'running' || aiJobStatus === 'queued')
       && aiJobMeta?.googleRouteId === route?.Id);
@@ -74,6 +77,23 @@ export default function RouteCard({ route }) {
       setEnhancing(false);
     }
   }, [route, enhanceRunning, trackAIJob]);
+
+  /** Deletes the selected Google Route after confirmation (mirrors SF routingApplication). */
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!route?.Id) return;
+    setDeleting(true);
+    try {
+      await routingApi.deleteRoute(route.Id);
+      setConfirmDelete(false);
+      selectRoute(null);
+      await refreshRoutes();
+      toast.success(`Deleted "${route.Name}"`);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDeleting(false);
+    }
+  }, [route, selectRoute, refreshRoutes]);
 
   const metrics = useMemo(() => {
     if (!route) return [];
@@ -201,14 +221,25 @@ export default function RouteCard({ route }) {
         )}
         <ActionBtn onClick={openCompare} icon={ICONS.compare} title="Compare with another route">Compare</ActionBtn>
         {!routeCompleted && (
-          <ActionBtn
-            variant="ai"
-            onClick={handleAIEnhance}
-            disabled={enhanceRunning}
-            icon={<span className="text-[10px] leading-none">✦</span>}
-          >
-            {enhanceRunning ? 'Analyzing…' : 'AI Enhance'}
-          </ActionBtn>
+          <>
+            <ActionBtn
+              variant="ai"
+              onClick={handleAIEnhance}
+              disabled={enhanceRunning}
+              icon={<span className="text-[10px] leading-none">✦</span>}
+            >
+              {enhanceRunning ? 'Analyzing…' : 'AI Enhance'}
+            </ActionBtn>
+            <ActionBtn
+              variant="danger"
+              onClick={() => setConfirmDelete(true)}
+              disabled={deleting}
+              icon={ICONS.trash}
+              title="Delete this route"
+            >
+              Delete
+            </ActionBtn>
+          </>
         )}
       </div>
 
@@ -224,6 +255,18 @@ export default function RouteCard({ route }) {
           {route.Comment__c}
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmDelete}
+        title="Are you sure!"
+        message={`You want to remove ${route.Name} Route`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        loading={deleting}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => !deleting && setConfirmDelete(false)}
+      />
     </div>
   );
 }
@@ -231,6 +274,7 @@ export default function RouteCard({ route }) {
 const BTN_VARIANTS = {
   primary: 'bg-primary text-white hover:bg-primary-hover shadow-sm',
   ai: 'bg-ai text-white hover:bg-ai-hover shadow-sm',
+  danger: 'bg-bg text-error border border-error/40 hover:bg-error-bg',
   ghost: 'bg-bg text-txt border border-border hover:bg-border/50',
 };
 
@@ -262,6 +306,11 @@ const ICONS = {
   compare: (
     <svg className={ICON_CLS} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+    </svg>
+  ),
+  trash: (
+    <svg className={ICON_CLS} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
     </svg>
   ),
 };

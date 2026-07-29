@@ -494,10 +494,15 @@ router.post('/approve', async (req, res, next) => {
     if (Array.isArray(resolutions) && resolutions.length) {
       items = resolutions
         .filter((r) => r?.logId && r?.outcome)
-        .map((r) => ({ logId: r.logId, outcome: r.outcome }));
+        .map((r) => ({
+          logId: r.logId,
+          outcome: r.outcome,
+          // Optional manager note (mainly used when declining).
+          comment: typeof r.comment === 'string' ? r.comment.trim() : '',
+        }));
     } else if (logIds?.length && status) {
       const outcome = status === 'Accepted' ? 'add' : 'ignore';
-      items = logIds.map((id) => ({ logId: id, outcome }));
+      items = logIds.map((id) => ({ logId: id, outcome, comment: '' }));
     }
 
     if (!items?.length) {
@@ -534,7 +539,30 @@ router.post('/approve', async (req, res, next) => {
         status: statusFor(i.outcome),
         outcome: i.outcome,
         source: 'enhance_approve',
+        detail: i.comment || undefined,
       });
+
+      // Persist optional decline/decision notes as RouteLogComment__c (no AI reply)
+      // so accountRouteHistory / future generation can recall why managers disagreed.
+      if (i.comment) {
+        try {
+          const created = await conn.sobject('RouteLogComment__c').create({
+            Route_Log__c: i.logId,
+            Body__c: i.comment.slice(0, 32000),
+            Author__c: userName,
+            Is_AI__c: false,
+          });
+          enqueueFeedback({
+            type: 'route_log_comment',
+            logId: i.logId,
+            commentId: created.id,
+            source: 'decline_comment',
+            detail: i.comment.slice(0, 2000),
+          });
+        } catch (err) {
+          logger.warn('[enhance/approve] decline comment save failed', { logId: i.logId, error: err.message });
+        }
+      }
     }
 
     const removed = [];

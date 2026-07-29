@@ -335,6 +335,7 @@ module.exports = {
   rankCandidates,
   loadEnhanceAddCandidates,
   loadRecentlyDeclinedAddAccountIds,
+  queryCandidateAccounts,
   isAddReason,
   // Exported for unit tests
   daysAgoISO,

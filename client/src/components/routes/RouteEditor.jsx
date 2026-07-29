@@ -4,6 +4,7 @@ import useStore from '../../store';
 import * as routingApi from '../../api/routing';
 import AccountTicketSearch from '../shared/AccountTicketSearch';
 import Select from '../ui/Select';
+import DatePicker from '../ui/DatePicker';
 import { OverlaySpinner } from '../ui/Spinner';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
@@ -64,6 +65,7 @@ export default function RouteEditor() {
   const [waypoints, setWaypoints] = useState([]);
   const [expandedIdx, setExpandedIdx] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [driverSaving, setDriverSaving] = useState(false);
 
   // Latest waypoints for async callbacks so in-progress row edits survive an add.
   const waypointsRef = useRef(waypoints);
@@ -193,6 +195,50 @@ export default function RouteEditor() {
     finally { setSaving(false); }
   };
 
+  /**
+   * Persists driver change immediately (SF routingEditor handleChangeDriver):
+   * updates Driver__c + stop Driver_Name__c, optimizes, refreshes — no Save click.
+   */
+  const handleDriverChange = useCallback(async (nextDriverId) => {
+    if (!route?.Id || nextDriverId === driverId) return;
+    const driver = drivers.find((d) => d.Id === nextDriverId) || null;
+    const driverName = driver?.Name || '';
+    setDriverId(nextDriverId || '');
+    setWaypoints((prev) => prev.map((w) => ({ ...w, Driver_Name__c: driverName })));
+    setDriverSaving(true);
+    try {
+      const googleRoute = {
+        Id: route.Id,
+        Name: name,
+        Driver__c: nextDriverId || null,
+        Service_Date__c: serviceDate,
+        Service_Location_Start__c: startLoc || null,
+        Service_Location_End__c: endLoc || null,
+      };
+      const routePoints = waypointsRef.current.map((w, i) => ({
+        ...buildRoutePoint(w, i, route, name, serviceDate),
+        Driver_Name__c: driverName,
+      }));
+      await routingApi.updateRoute({ googleRoute, routePoints });
+      await routingApi.optimizeRoute({
+        googleRoute: {
+          Id: route.Id,
+          Driver__c: nextDriverId || null,
+          Service_Location_Start__c: startLoc || route.Service_Location_Start__c,
+          Service_Location_End__c: endLoc || route.Service_Location_End__c,
+        },
+        routePoints,
+      });
+      await refreshRoutes();
+      toast.success(driver ? `Driver set to ${driver.Name}` : 'Driver cleared');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+      setDriverId(route.Driver__c || '');
+    } finally {
+      setDriverSaving(false);
+    }
+  }, [route, driverId, drivers, name, serviceDate, startLoc, endLoc, refreshRoutes]);
+
   const driverOptions = useMemo(() => [
     { value: '', label: 'Select Driver' },
     ...drivers.map((d) => ({ value: d.Id, label: d.Name })),
@@ -209,7 +255,7 @@ export default function RouteEditor() {
 
   return (
     <div className="flex flex-col h-full relative">
-      {saving && <OverlaySpinner label="Saving…" />}
+      {(saving || driverSaving) && <OverlaySpinner label={driverSaving ? 'Updating driver…' : 'Saving…'} />}
 
       {/* Fixed header section */}
       <div className="shrink-0 flex flex-col gap-2.5 p-4 bg-surface border border-border rounded-xl shadow-sm mx-1 mb-2">
@@ -235,23 +281,36 @@ export default function RouteEditor() {
             <span className="text-xs text-txt-secondary bg-bg px-2 py-0.5 rounded tabular-nums">{waypoints.length} stops</span>
           </div>
           <div className="flex gap-1.5 shrink-0">
-            <button className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-hover transition disabled:opacity-50" onClick={handleSave} disabled={saving}>
+            <button className="h-7 px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-hover transition disabled:opacity-50" onClick={handleSave} disabled={saving || driverSaving}>
               {saving ? 'Saving…' : 'Save & Optimize'}
             </button>
           </div>
         </div>
 
-        {/* Route settings — compact inline */}
-        <div className="flex items-end gap-2 ml-10">
-          <Field label="Driver" className="flex-1">
-            <Select value={driverId} onChange={setDriverId} options={driverOptions} placeholder="Select Driver" searchable />
-          </Field>
-          <Field label="Start" className="flex-1">
-            <Select value={startLoc} onChange={setStartLoc} options={locationOptions} placeholder="None" searchable />
-          </Field>
-          <Field label="End" className="flex-1">
-            <Select value={endLoc} onChange={setEndLoc} options={locationOptions} placeholder="None" searchable />
-          </Field>
+        {/* Route settings — row 1: Service Date + Driver; row 2: Start + End */}
+        <div className="flex flex-col gap-2 ml-10">
+          <div className="flex items-end gap-2">
+            <Field label="Service Date" className="flex-1">
+              <DatePicker value={serviceDate || ''} onChange={setServiceDate} className="w-full" />
+            </Field>
+            <Field label="Driver" className="flex-1">
+              <Select
+                value={driverId}
+                onChange={handleDriverChange}
+                options={driverOptions}
+                placeholder="Select Driver"
+                searchable
+              />
+            </Field>
+          </div>
+          <div className="flex items-end gap-2">
+            <Field label="Start" className="flex-1">
+              <Select value={startLoc} onChange={setStartLoc} options={locationOptions} placeholder="None" searchable />
+            </Field>
+            <Field label="End" className="flex-1">
+              <Select value={endLoc} onChange={setEndLoc} options={locationOptions} placeholder="None" searchable />
+            </Field>
+          </div>
         </div>
 
         {/* Search */}
@@ -384,7 +443,7 @@ function ExpandedRow({ wp, idx, updateWaypoint }) {
   );
 }
 
-/** Labeled field wrapper for the route settings header (Driver/Start/End). */
+/** Labeled field wrapper for the route settings header. */
 function Field({ label, children, className = '' }) {
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
