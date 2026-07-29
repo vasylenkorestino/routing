@@ -135,16 +135,39 @@ test('fill rate needs 2+ dates and at least one positive gallons reading', () =>
 
 /* ── last service date resolution ─────────────────────────── */
 
-test('UCOLastServiceDate__c wins; Service__c history is the fallback', () => {
+test('uses the newer of UCOLastServiceDate__c and Service__c history', () => {
   assert.deepEqual(
     resolveLastServiceDate({ UCOLastServiceDate__c: '2026-06-15', Services__r: services(['2026-06-20', 50]) }),
-    { date: '2026-06-15', source: 'uco_last_service_date' },
+    { date: '2026-06-20', source: 'service_history' },
+  );
+  assert.deepEqual(
+    resolveLastServiceDate({ UCOLastServiceDate__c: '2026-06-25', Services__r: services(['2026-06-20', 50]) }),
+    { date: '2026-06-25', source: 'uco_last_service_date' },
+  );
+  assert.deepEqual(
+    resolveLastServiceDate({ UCOLastServiceDate__c: '2026-06-20', Services__r: services(['2026-06-20', 50]) }),
+    { date: '2026-06-20', source: 'max_of_field_and_history' },
   );
   assert.deepEqual(
     resolveLastServiceDate({ Services__r: services(['2026-06-20', 50], ['2026-05-20', 40]) }),
     { date: '2026-06-20', source: 'service_history' },
   );
   assert.equal(resolveLastServiceDate({}), null);
+});
+
+test('stale UCOLastServiceDate__c does not invent multi-year overdue (Wings & More case)', () => {
+  const res = evaluateAccount(
+    {
+      UCOLastServiceDate__c: '2020-09-18',
+      Estimated_Pickup_Frequency__c: '3 Weeks',
+      Services__r: services(['2024-07-16', 15], ['2024-07-01', 50]),
+    },
+    '2024-07-30',
+  );
+  assert.equal(res.lastServiceDate, '2024-07-16');
+  assert.equal(res.lastDateSource, 'service_history');
+  assert.equal(res.nextDueDate, '2024-08-06'); // 07-16 + 21d
+  assert.equal(res.due, false);
 });
 
 /* ── evaluateAccount: due / not-due boundaries ────────────── */

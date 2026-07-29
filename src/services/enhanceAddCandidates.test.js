@@ -35,13 +35,14 @@ function services(...pairs) {
 
 test('Manjay-like: serviced ~10 days ago on 4 Weeks is not due for ADD', () => {
   // Service on 2026-07-06, route date 2026-07-16 → 10 days into a 28-day cycle.
+  // 3+ UCO history so new-account remain rules do not force ADD.
   const account = {
     Id: '001MANJAY',
     Name: 'Manjay',
     UCOLastServiceDate__c: '2026-07-06',
     Estimated_Pickup_Frequency__c: '4 Weeks',
     Tank_Size__c: '100 Gallon',
-    Services__r: services(['2026-07-06', 40], ['2026-06-08', 45]),
+    Services__r: services(['2026-07-06', 40], ['2026-06-08', 45], ['2026-05-11', 50]),
   };
   assert.equal(isDueForAdd(account, '2026-07-16'), false);
 });
@@ -65,6 +66,63 @@ test('On-Call accounts are never due for ADD', () => {
   assert.equal(isDueForAdd(account, '2026-07-16'), false);
 });
 
+test('stale UCOLastServiceDate with recent history is not ADD (Wings & More)', () => {
+  const account = {
+    Id: '001WINGS',
+    UCOLastServiceDate__c: '2020-09-18',
+    Estimated_Pickup_Frequency__c: '3 Weeks',
+    Services__r: services(['2024-07-16', 15], ['2024-07-01', 50], ['2024-04-10', 70]),
+  };
+  assert.equal(isDueForAdd(account, '2024-07-30'), false);
+});
+
+test('CDL >14 days with no UCO is ADD-eligible via mustRemain', () => {
+  const account = {
+    Id: '001CDL',
+    Services__r: {
+      records: [{
+        Service_Date__c: '2026-07-01',
+        Qty_Gallons__c: null,
+        RecordType: { Name: 'Deliver Container' },
+      }],
+    },
+  };
+  assert.equal(isDueForAdd(account, '2026-07-20'), true);
+});
+
+test('account with 1 UCO is ADD-eligible via first-three remain rule', () => {
+  const account = {
+    Id: '001NEW',
+    UCOLastServiceDate__c: '2026-07-10',
+    Estimated_Pickup_Frequency__c: '4 Weeks',
+    Services__r: {
+      records: [{
+        Service_Date__c: '2026-07-10',
+        Qty_Gallons__c: 40,
+        RecordType: { Name: 'UCO Collection' },
+      }],
+    },
+  };
+  // Not due by frequency (10 days into 28-day cycle) but must remain.
+  assert.equal(isDueForAdd(account, '2026-07-20'), true);
+});
+
+test('mature recently serviced account stays excluded from ADD', () => {
+  const account = {
+    Id: '001MATURE',
+    UCOLastServiceDate__c: '2026-07-10',
+    Estimated_Pickup_Frequency__c: '4 Weeks',
+    Services__r: {
+      records: [
+        { Service_Date__c: '2026-07-10', Qty_Gallons__c: 40, RecordType: { Name: 'UCO Collection' } },
+        { Service_Date__c: '2026-06-12', Qty_Gallons__c: 45, RecordType: { Name: 'UCO Collection' } },
+        { Service_Date__c: '2026-05-15', Qty_Gallons__c: 50, RecordType: { Name: 'UCO Collection' } },
+      ],
+    },
+  };
+  assert.equal(isDueForAdd(account, '2026-07-20'), false);
+});
+
 /* ── map + rank ───────────────────────────────────────────── */
 
 test('mapCandidate includes due context and shape flags', () => {
@@ -78,6 +136,7 @@ test('mapCandidate includes due context and shape flags', () => {
     Shape__c: 'a0sROUTE',
     Shape_Name__c: 'Route Shape',
     Priority_Tier__c: 'VIP',
+    DaysInterval__c: 77,
     Services__r: services(['2026-06-01', 60]),
   };
   const mapped = mapCandidate(account, '2026-07-16', {
@@ -92,6 +151,8 @@ test('mapCandidate includes due context and shape flags', () => {
   assert.equal(mapped.inNeighborShape, false);
   assert.equal(mapped.shapeName, 'Route Shape');
   assert.ok(mapped.dueReason);
+  assert.equal(mapped.gpdHistorySpanDays, 77);
+  assert.equal(mapped.interval, undefined);
 });
 
 test('rankCandidates sorts by overdue days then estimated gallons', () => {

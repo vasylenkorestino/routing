@@ -32,7 +32,8 @@ DECISION FACTORS:
 - Tank fill % = (GPD × days_since_last_service) / tank_capacity. >=80% = must service. <30% = skip.
 - VIP/No-fail = always keep
 - Fixed points = always keep
-- Overdue accounts (days since service > interval) = strong add candidates
+- New accounts: fewer than 3 UCO Collection services = always keep; CDL (Deliver Container) more than 14 days ago with no UCO yet = keep/add
+- Overdue = days past nextDueDate / service-due engine only. NEVER treat gpdHistorySpanDays (DaysInterval__c) as overdue — it is the GPD history window span, not cadence.
 - Same plaza or street as existing stop = add if even moderately full
 - Open tickets = higher priority
 - Special instructions may indicate constraints (skip conditions, time windows, etc.)
@@ -205,7 +206,7 @@ class AccountSelector {
         lng: s.Longitude__c,
         tankSize: s.tankSize,
         lastServiceDate: s.lastServiceDate,
-        interval: s.interval,
+        gpdHistorySpanDays: s.interval,
         priorityTier: s.priorityTier,
         routeNotes: redactFreeText(s.routeNotes),
         specialInstructions: redactFreeText(s.specialInstructions),
@@ -219,7 +220,7 @@ class AccountSelector {
         lat: a.MALatitude__c,
         lng: a.MALongitude__c,
         lastServiceDate: a.Last_Service_Date__c,
-        interval: a.DaysInterval__c,
+        gpdHistorySpanDays: a.DaysInterval__c,
         tankSize: a.Tank_Size__c,
         priorityTier: a.Priority_Tier__c,
         routeNotes: redactFreeText(a.Route_Notes__c),

@@ -5,7 +5,7 @@
  * Used by the Planning Workspace planner, the account_discovery skill and the
  * service_due_analysis skill so every planning path applies the same rules:
  *
- *   last service date : UCOLastServiceDate__c, falling back to the newest
+ *   last service date : newer of UCOLastServiceDate__c and the newest
  *                       UCO Collection Service__c.Service_Date__c
  *   frequency (days)  : Estimated_Pickup_Frequency__c picklist ("3 Weeks" = 21),
  *                       falling back to Pickup_Frequency_in_Days__c, falling back
@@ -33,11 +33,14 @@ const ACCOUNT_DUE_FIELDS =
   'UCOLastServiceDate__c, Estimated_Pickup_Frequency__c, Pickup_Frequency_in_Days__c, ' +
   'Tank_Size__c, ContainerCapacity__c, Container_Size_number__c, Estimated_GPM__c';
 
-/** Services__r subquery the engine needs (last service fallback + fill-rate model). */
+/**
+ * Services__r subquery: UCO Collection + Deliver Container (CDL).
+ * Due/fill-rate use UCO only; CDL is for new-account remain-on-route rules.
+ */
 const SERVICE_HISTORY_SUBQUERY =
-  "(SELECT Id, Service_Date__c, Qty_Gallons__c FROM Services__r " +
-  "WHERE RecordType.Name = 'UCO Collection' AND Service_Date__c != null " +
-  "ORDER BY Service_Date__c DESC LIMIT 12)";
+  "(SELECT Id, Service_Date__c, Qty_Gallons__c, RecordType.Name FROM Services__r " +
+  "WHERE RecordType.Name IN ('UCO Collection', 'Deliver Container') AND Service_Date__c != null " +
+  "ORDER BY Service_Date__c DESC LIMIT 20)";
 
 /* ── date helpers ─────────────────────────────────────────── */
 
@@ -104,14 +107,23 @@ function parseFrequencyDays(account) {
   return null;
 }
 
+/** True when a Service__c row is a UCO Collection (excludes CDL / Deliver Container). */
+function isUcoCollectionService(service) {
+  const rt = service?.RecordType?.Name || service?.RecordTypeName__c || '';
+  // Legacy SOQL without RecordType defaults to UCO-only history.
+  if (!rt) return true;
+  return rt === 'UCO Collection';
+}
+
 /**
  * Normalizes the Services__r subquery result (jsforce { records } wrapper or a
- * plain array) into [{ date: 'YYYY-MM-DD', gallons: number|null }], newest first.
+ * plain array) into UCO Collection rows [{ date, gallons }], newest first.
+ * Deliver Container (CDL) rows are excluded from due/fill-rate math.
  */
 function extractServiceHistory(account) {
   const raw = account?.Services__r?.records || account?.Services__r || [];
   return raw
-    .filter((s) => s && s.Service_Date__c)
+    .filter((s) => s && s.Service_Date__c && isUcoCollectionService(s))
     .map((s) => ({
       date: String(s.Service_Date__c).slice(0, 10),
       gallons: Number.isFinite(Number(s.Qty_Gallons__c)) && s.Qty_Gallons__c != null
@@ -179,14 +191,28 @@ function estimateFillRate(services) {
   return rate > 0 ? round2(rate) : null;
 }
 
-/** Last UCO service date: UCOLastServiceDate__c or newest Service__c. Returns { date, source } or null. */
+/**
+ * Last UCO service date: newer of UCOLastServiceDate__c and newest UCO Service__c.
+ * Prevents stale account fields from inventing multi-year overdue ADD candidates.
+ * Returns { date, source } or null.
+ */
 function resolveLastServiceDate(account, services = extractServiceHistory(account)) {
-  if (account?.UCOLastServiceDate__c) {
-    return { date: String(account.UCOLastServiceDate__c).slice(0, 10), source: 'uco_last_service_date' };
+  const fieldDate = account?.UCOLastServiceDate__c
+    ? String(account.UCOLastServiceDate__c).slice(0, 10)
+    : null;
+  const historyDate = services.length > 0 ? services[0].date : null;
+
+  if (fieldDate && historyDate) {
+    if (historyDate > fieldDate) {
+      return { date: historyDate, source: 'service_history' };
+    }
+    if (fieldDate > historyDate) {
+      return { date: fieldDate, source: 'uco_last_service_date' };
+    }
+    return { date: fieldDate, source: 'max_of_field_and_history' };
   }
-  if (services.length > 0) {
-    return { date: services[0].date, source: 'service_history' };
-  }
+  if (fieldDate) return { date: fieldDate, source: 'uco_last_service_date' };
+  if (historyDate) return { date: historyDate, source: 'service_history' };
   return null;
 }
 
@@ -318,6 +344,7 @@ module.exports = {
   parsePicklistFrequencyDays,
   parseFrequencyDays,
   isOnCall,
+  isUcoCollectionService,
   extractServiceHistory,
   estimateFrequencyFromHistory,
   parseTankCapacity,

@@ -11,6 +11,7 @@ const {
   evaluateAccount,
   daysBetween,
 } = require('../modules/serviceDue');
+const { evaluateMustRemainOnRoute, remainReasonLabel } = require('../modules/routeKeepRules');
 
 const BBOX_PAD = 0.15;
 const SOQL_LIMIT = 200;
@@ -190,12 +191,14 @@ async function loadRecentlyDeclinedAddAccountIds(conn, accountIds = []) {
 }
 
 /**
- * True when evaluateAccount says the account is due for serviceDate.
- * Not-due accounts are never ADD candidates.
+ * True when the account is due for serviceDate, or must remain (CDL / first-3 UCO).
+ * Mature recently-serviced accounts stay out after last-service resolution.
  */
 function isDueForAdd(account, serviceDate) {
   const svc = evaluateAccount(account, serviceDate);
-  return !!svc.due;
+  if (svc.due) return true;
+  const remain = evaluateMustRemainOnRoute(account, serviceDate);
+  return !!remain.mustRemainOnRoute;
 }
 
 /**
@@ -203,6 +206,7 @@ function isDueForAdd(account, serviceDate) {
  */
 function mapCandidate(account, serviceDate, { routeShapeId = null, neighborShapeIds = [] } = {}) {
   const svc = evaluateAccount(account, serviceDate);
+  const remain = evaluateMustRemainOnRoute(account, serviceDate);
   const daysOverdue = svc.due && svc.nextDueDate
     ? Math.max(0, daysBetween(svc.nextDueDate, serviceDate))
     : 0;
@@ -223,6 +227,11 @@ function mapCandidate(account, serviceDate, { routeShapeId = null, neighborShape
     daysOverdue,
     estimatedGallonsAtDate: svc.estimatedGallonsAtDate,
     dueReason: svc.reason,
+    mustRemainOnRoute: remain.mustRemainOnRoute,
+    remainReason: remain.remainReason,
+    remainReasonLabel: remainReasonLabel(remain.remainReason),
+    ucoServiceCount: remain.ucoServiceCount,
+    cdlDeliveryDate: remain.cdlDeliveryDate,
     tankSize: account.Tank_Size__c,
     secondContainer: account.Second_Container__c,
     priorityTier: account.Priority_Tier__c,
@@ -232,10 +241,12 @@ function mapCandidate(account, serviceDate, { routeShapeId = null, neighborShape
     shapeName: account.Shape_Name__c || null,
     inRouteShape,
     inNeighborShape,
-    interval: account.DaysInterval__c,
+    // GPD history span (oldest→newest positive UCO) — NOT pickup cadence / overdue.
+    gpdHistorySpanDays: account.DaysInterval__c,
     recentServices: services.map((sv) => ({
       gallons: sv.Qty_Gallons__c,
       date: sv.Service_Date__c,
+      recordType: sv.RecordType?.Name || null,
     })),
   };
 }

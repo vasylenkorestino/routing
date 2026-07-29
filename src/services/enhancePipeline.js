@@ -8,13 +8,30 @@ const { analyzeRouteCompare } = require('../modules/routeCompare');
 const { saveEnhanceLogs } = require('./saveEnhanceLogs');
 const { loadEnhanceAddCandidates } = require('./enhanceAddCandidates');
 const { buildMemoryContext } = require('../agent/memory/recall');
+const {
+  ACCOUNT_DUE_FIELDS,
+  SERVICE_HISTORY_SUBQUERY,
+  evaluateAccount,
+  daysBetween,
+} = require('../modules/serviceDue');
+const {
+  evaluateMustRemainOnRoute,
+  remainReasonLabel,
+  applyMustRemainKeepOverride,
+} = require('../modules/routeKeepRules');
 const logger = require('../utils/logger');
 
 const TRUCK_CAPACITY_GAL = 1800;
 
 const ANALYZE_STOPS_SYSTEM = `You are an AI route analyst for a UCO collection company. Analyze EXISTING stops only.
 
-Use tank fill %, VIP/fixed points, driver notes, and truck capacity (~1800 gal).
+Use tank fill %, VIP/fixed points, driver notes, mustRemainOnRoute, and truck capacity (~1800 gal).
+
+HARD RULES:
+- VIP/No-fail and fixed points = always keep.
+- mustRemainOnRoute = true → always keep (new account: <3 UCO services, or CDL delivery >14 days ago with no UCO yet).
+- Overdue means daysOverdue / days past nextDueDate from the service-due engine. NEVER treat gpdHistorySpanDays (DaysInterval__c) as overdue or cadence — it is only the GPD history window span.
+- Cite lastServiceDate, nextDueDate, daysOverdue (or mustRemain reason) in each reason.
 
 CRITICAL: Reply with ONLY a single JSON object. No markdown fences, no preamble, no commentary.
 {
@@ -24,14 +41,14 @@ CRITICAL: Reply with ONLY a single JSON object. No markdown fences, no preamble,
 
 const ANALYZE_ADDS_SYSTEM = `You are an AI route analyst for a UCO collection company. Recommend NEARBY accounts to ADD to the route.
 
-The nearbyAccounts list is PRE-FILTERED: every account is already due for service on the route date (service-due engine). Do NOT suggest accounts outside this list.
+The nearbyAccounts list is PRE-FILTERED: every account is due for service on the route date OR must remain (CDL >14d / first 3 UCO). Do NOT suggest accounts outside this list.
 
 Rules:
-- Only recommend from nearbyAccounts. Prefer higher daysOverdue and higher estimatedGallonsAtDate.
+- Only recommend from nearbyAccounts. Prefer higher daysOverdue and higher estimatedGallonsAtDate; also prefer mustRemainOnRoute new accounts.
 - Prefer inRouteShape, then inNeighborShape; avoid large geographic detours from the current stop path.
 - Respect remainingCapacityGal — do not suggest adds that would exceed truck capacity (~1800 gal).
-- Never recommend recently serviced / not-due accounts (they are already excluded).
-- In each reason, cite lastServiceDate, nextDueDate (or effectiveFrequencyDays), and estimated gallons.
+- Never invent overdue from gpdHistorySpanDays — overdue is daysOverdue past nextDueDate only.
+- In each reason, cite lastServiceDate, nextDueDate (or remainReasonLabel), and estimated gallons.
 - If Agent Memory rules are provided, follow them unless they conflict with hard due/capacity constraints.
 - Return fewer high-quality adds rather than many weak ones. Empty suggestedAdds is OK.
 - If nearbyAccounts is empty, return {"suggestedAdds":[]}.
@@ -146,11 +163,13 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   const loadAccounts = async () => {
     if (!accountIds.length) return;
     const ids = accountIds.map((id) => `'${id}'`).join(',');
+    // Tank_Size__c comes from ACCOUNT_DUE_FIELDS — do not list it again.
     const acctQuery = `
-      SELECT Id, Name, Last_Service_Date__c, DaysInterval__c, Tank_Size__c,
+      SELECT Id, Name, Last_Service_Date__c, DaysInterval__c,
              Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
              MALatitude__c, MALongitude__c, Ignore_For_Routing__c,
-             (SELECT Id, Qty_Gallons__c, Service_Date__c FROM Services__r ORDER BY CreatedDate DESC LIMIT 5)
+             ${ACCOUNT_DUE_FIELDS},
+             ${SERVICE_HISTORY_SUBQUERY}
       FROM Account WHERE Id IN (${ids})
     `;
     const acctResult = await recorder.wrap('Load Accounts', 'SOQL', () => conn.query(acctQuery), { input: acctQuery });
@@ -177,9 +196,19 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   const acctMap = {};
   accounts.forEach((a) => { acctMap[a.Id] = a; });
 
+  const serviceDate = String(gRoute.Service_Date__c || '').slice(0, 10)
+    || new Date().toISOString().slice(0, 10);
+
+  const remainByAccountId = {};
   const stopsData = stops.records.map((s) => {
     const acct = acctMap[s.AccountId__c] || {};
     const services = acct.Services__r?.records || [];
+    const svc = evaluateAccount(acct, serviceDate);
+    const remain = evaluateMustRemainOnRoute(acct, serviceDate);
+    if (s.AccountId__c) remainByAccountId[s.AccountId__c] = remain;
+    const daysOverdue = svc.due && svc.nextDueDate
+      ? Math.max(0, daysBetween(svc.nextDueDate, serviceDate))
+      : 0;
     return {
       stopId: s.Id,
       accountId: s.AccountId__c,
@@ -192,13 +221,27 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
       lng: s.Longitude__c,
       tankSize: acct.Tank_Size__c,
       secondContainer: acct.Second_Container__c,
-      lastServiceDate: acct.Last_Service_Date__c,
-      interval: acct.DaysInterval__c,
+      lastServiceDate: svc.lastServiceDate || acct.Last_Service_Date__c,
+      nextDueDate: svc.nextDueDate,
+      effectiveFrequencyDays: svc.effectiveFrequencyDays,
+      daysOverdue,
+      dueReason: svc.reason,
+      mustRemainOnRoute: remain.mustRemainOnRoute,
+      remainReason: remain.remainReason,
+      remainReasonLabel: remainReasonLabel(remain.remainReason),
+      ucoServiceCount: remain.ucoServiceCount,
+      cdlDeliveryDate: remain.cdlDeliveryDate,
+      // GPD history span — NOT pickup cadence / overdue days.
+      gpdHistorySpanDays: acct.DaysInterval__c,
       priorityTier: acct.Priority_Tier__c,
       routeNotes: acct.Route_Notes__c,
       specialInstructions: acct.Notes__c,
       driverNotes: s.Driver_Notes__c,
-      recentServices: services.map((sv) => ({ gallons: sv.Qty_Gallons__c, date: sv.Service_Date__c })),
+      recentServices: services.map((sv) => ({
+        gallons: sv.Qty_Gallons__c,
+        date: sv.Service_Date__c,
+        recordType: sv.RecordType?.Name || null,
+      })),
     };
   });
 
@@ -232,12 +275,19 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
 
   const stopsText = stopsResponse.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
   const stopsAnalysis = parseJson(stopsText);
-  const existingStops = stopsAnalysis.existingStops || [];
+  const existingStops = applyMustRemainKeepOverride(
+    stopsAnalysis.existingStops || [],
+    remainByAccountId,
+  );
   const summary = stopsAnalysis.summary || '';
 
   setStep(jobId, 'analyze_stops', 'done');
   const flagged = existingStops.filter((s) => s.action === 'remove' || s.action === 'flag').length;
+  const remainForced = existingStops.filter((s) => s._remainOverride).length;
   aiJobs.addFinding(jobId, `Reviewed ${existingStops.length} stops — ${flagged} flagged for review`);
+  if (remainForced) {
+    aiJobs.addFinding(jobId, `Forced KEEP on ${remainForced} new-account/CDL stops`);
+  }
 
   // Stage 1: persist stop recommendations immediately so the UI/map can show them
   // while add-candidate analysis continues in the background.
@@ -441,4 +491,10 @@ function extractFirstJsonValue(text) {
   return null;
 }
 
-module.exports = { runEnhancePipeline, ANALYZE_STOPS_SYSTEM, ANALYZE_ADDS_SYSTEM, parseJson };
+module.exports = {
+  runEnhancePipeline,
+  ANALYZE_STOPS_SYSTEM,
+  ANALYZE_ADDS_SYSTEM,
+  parseJson,
+  applyMustRemainKeepOverride,
+};

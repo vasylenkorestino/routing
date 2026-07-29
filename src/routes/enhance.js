@@ -11,6 +11,17 @@ const { publishJobProgress } = require('../services/aiJobPublisher');
 const { runEnhancePipeline, ANALYZE_STOPS_SYSTEM } = require('../services/enhancePipeline');
 const { saveEnhanceLogs } = require('../services/saveEnhanceLogs');
 const { loadEnhanceAddCandidates } = require('../services/enhanceAddCandidates');
+const {
+  ACCOUNT_DUE_FIELDS,
+  SERVICE_HISTORY_SUBQUERY,
+  evaluateAccount,
+  daysBetween,
+} = require('../modules/serviceDue');
+const {
+  evaluateMustRemainOnRoute,
+  remainReasonLabel,
+  applyMustRemainKeepOverride,
+} = require('../modules/routeKeepRules');
 const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 
@@ -19,7 +30,7 @@ const ANALYZE_SYSTEM = `You are an AI route analyst for a UCO (Used Cooking Oil)
 You will receive a JSON object with:
 - route: route header info
 - stops: current stops on the route (with account details, service history, tank info)
-- nearbyAccounts: PRE-FILTERED due accounts (service-due engine) in the route/neighbor shapes — not already on this route
+- nearbyAccounts: PRE-FILTERED due accounts (service-due engine) or must-remain new accounts — not already on this route
 
 YOUR TASKS:
 1. Analyze each EXISTING stop — recommend keep/remove/flag
@@ -39,7 +50,9 @@ DECISION FACTORS:
 - Tank fill % = (GPD × days_since_last_service) / tank_capacity. ≥80% = must service. <30% = skip.
 - VIP/No-fail = always keep
 - Fixed points = always keep
-- nearbyAccounts are already due — prefer higher daysOverdue / estimatedGallonsAtDate; cite lastServiceDate and nextDueDate in ADD reasons
+- mustRemainOnRoute = true → always keep / strong add (new account <3 UCO, or CDL >14 days with no UCO)
+- Overdue = daysOverdue past nextDueDate only. NEVER treat gpdHistorySpanDays (DaysInterval__c) as overdue — it is the GPD history window span.
+- nearbyAccounts are already due or must-remain — prefer higher daysOverdue / estimatedGallonsAtDate; cite lastServiceDate and nextDueDate (or remainReasonLabel) in ADD reasons
 - Prefer inRouteShape then inNeighborShape; same plaza/street as existing stop strengthens an add
 - Open tickets = higher priority to add
 - Consider truck capacity (~1800 gal) — don't exceed with additions
@@ -93,10 +106,11 @@ router.post('/', async (req, res, next) => {
     if (accountIds.length > 0) {
       const ids = accountIds.map((id) => `'${id}'`).join(',');
       const acctQuery = `
-        SELECT Id, Name, Last_Service_Date__c, DaysInterval__c, Tank_Size__c,
+        SELECT Id, Name, Last_Service_Date__c, DaysInterval__c,
                Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
                MALatitude__c, MALongitude__c, Ignore_For_Routing__c,
-               (SELECT Id, Qty_Gallons__c, Service_Date__c FROM Services__r ORDER BY CreatedDate DESC LIMIT 5)
+               ${ACCOUNT_DUE_FIELDS},
+               ${SERVICE_HISTORY_SUBQUERY}
         FROM Account WHERE Id IN (${ids})
       `;
       const acctResult = await recorder.wrap('Load Accounts', 'SOQL', () => conn.query(acctQuery), {
@@ -108,9 +122,19 @@ router.post('/', async (req, res, next) => {
     const acctMap = {};
     accounts.forEach((a) => { acctMap[a.Id] = a; });
 
+    const serviceDate = String(gRoute.Service_Date__c || '').slice(0, 10)
+      || new Date().toISOString().slice(0, 10);
+    const remainByAccountId = {};
+
     const stopsData = stops.records.map((s) => {
       const acct = acctMap[s.AccountId__c] || {};
       const services = acct.Services__r?.records || [];
+      const svc = evaluateAccount(acct, serviceDate);
+      const remain = evaluateMustRemainOnRoute(acct, serviceDate);
+      if (s.AccountId__c) remainByAccountId[s.AccountId__c] = remain;
+      const daysOverdue = svc.due && svc.nextDueDate
+        ? Math.max(0, daysBetween(svc.nextDueDate, serviceDate))
+        : 0;
       return {
         stopId: s.Id,
         accountId: s.AccountId__c,
@@ -123,8 +147,17 @@ router.post('/', async (req, res, next) => {
         lng: s.Longitude__c,
         tankSize: acct.Tank_Size__c,
         secondContainer: acct.Second_Container__c,
-        lastServiceDate: acct.Last_Service_Date__c,
-        interval: acct.DaysInterval__c,
+        lastServiceDate: svc.lastServiceDate || acct.Last_Service_Date__c,
+        nextDueDate: svc.nextDueDate,
+        effectiveFrequencyDays: svc.effectiveFrequencyDays,
+        daysOverdue,
+        dueReason: svc.reason,
+        mustRemainOnRoute: remain.mustRemainOnRoute,
+        remainReason: remain.remainReason,
+        remainReasonLabel: remainReasonLabel(remain.remainReason),
+        ucoServiceCount: remain.ucoServiceCount,
+        cdlDeliveryDate: remain.cdlDeliveryDate,
+        gpdHistorySpanDays: acct.DaysInterval__c,
         priorityTier: acct.Priority_Tier__c,
         routeNotes: acct.Route_Notes__c,
         specialInstructions: acct.Notes__c,
@@ -132,6 +165,7 @@ router.post('/', async (req, res, next) => {
         recentServices: services.map((sv) => ({
           gallons: sv.Qty_Gallons__c,
           date: sv.Service_Date__c,
+          recordType: sv.RecordType?.Name || null,
         })),
       };
     });
@@ -187,7 +221,10 @@ router.post('/', async (req, res, next) => {
       return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.substring(0, 1000) });
     }
 
-    const existingStops = analysis.existingStops || analysis.stops || [];
+    const existingStops = applyMustRemainKeepOverride(
+      analysis.existingStops || analysis.stops || [],
+      remainByAccountId,
+    );
     const suggestedAdds = analysis.suggestedAdds || analysis.suggestedAccounts || [];
     const summary = analysis.summary || '';
 
