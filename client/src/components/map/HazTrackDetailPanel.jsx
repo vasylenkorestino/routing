@@ -4,7 +4,6 @@ import * as routingApi from '../../api/routing';
 import { toast } from '../ui/Toast';
 import { getErrorMessage } from '../../utils/error';
 import { isRouteCompleted } from '../../utils/route';
-import LastServices from '../shared/LastServices';
 import {
   HAZTRACK_STATUS_COLORS,
   LBS_PER_GALLON,
@@ -266,11 +265,6 @@ export default function HazTrackDetailPanel({ tank, onBack }) {
             ))}
           </div>
         </div>
-      )}
-
-      {/* Last Services — under Sensors, before events */}
-      {accountId && (
-        <LastServices accountId={accountId} accountName={accountName} />
       )}
 
       {/* Most recent events */}

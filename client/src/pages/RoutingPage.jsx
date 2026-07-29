@@ -34,8 +34,21 @@ function RightPanel() {
   const isEdit = useStore((s) => s.isEdit);
   const isLoading = useStore((s) => s.isLoading);
   const compareMode = useStore((s) => s.compareMode);
-  const [selectedPoint, setSelectedPoint] = useState(null);
+  const lastServicesFocus = useStore((s) => s.lastServicesFocus);
+  const setLastServicesFocus = useStore((s) => s.setLastServicesFocus);
   const [bottomTab, setBottomTab] = useState('services');
+
+  /** Stop row click → show Last Services / Tank & Sensor for that account. */
+  const handleSelectPoint = useCallback((point) => {
+    if (!point?.AccountId__c) {
+      setLastServicesFocus(null);
+      return;
+    }
+    setLastServicesFocus({
+      accountId: point.AccountId__c,
+      accountName: point.Account_Name__c || null,
+    });
+  }, [setLastServicesFocus]);
 
   if (compareMode && route) return <RouteComparePanel />;
 
@@ -71,7 +84,7 @@ function RightPanel() {
           ) : (
             <RouteDataTable
               points={route.Routes__r?.records ?? route.Routes__r ?? route.points ?? []}
-              onSelectPoint={setSelectedPoint}
+              onSelectPoint={handleSelectPoint}
             />
           )
         ) : (
@@ -79,12 +92,12 @@ function RightPanel() {
         )}
       </div>
 
-      {route && !isEdit && selectedPoint && (
+      {route && !isEdit && lastServicesFocus?.accountId && (
         <div className="shrink-0 border-t border-border max-h-[35%] overflow-auto relative">
           <button
             className="absolute top-2 right-2 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-bg hover:bg-border text-txt-secondary hover:text-error text-sm transition"
             title="Close"
-            onClick={() => setSelectedPoint(null)}
+            onClick={() => setLastServicesFocus(null)}
           >×</button>
 
           <div className="flex border-b border-border bg-surface">
@@ -101,14 +114,14 @@ function RightPanel() {
 
           {bottomTab === 'services' && (
             <LastServices
-              accountId={selectedPoint.AccountId__c}
-              accountName={selectedPoint.Account_Name__c}
+              accountId={lastServicesFocus.accountId}
+              accountName={lastServicesFocus.accountName}
             />
           )}
           {bottomTab === 'tanks' && (
             <TankSensorData
-              accountId={selectedPoint.AccountId__c}
-              accountName={selectedPoint.Account_Name__c}
+              accountId={lastServicesFocus.accountId}
+              accountName={lastServicesFocus.accountName}
             />
           )}
         </div>

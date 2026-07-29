@@ -33,6 +33,8 @@ const mapSlice = (set, get) => ({
   selectedShapeId: null,
   /** Selected HazTrack tank Id (opens detail + InfoWindow). */
   selectedHazTrackId: null,
+  /** Account shown in the right-panel Last Services strip (stop or HazTrack tank). */
+  lastServicesFocus: null,
   mapCenter: { lat: 33.749, lng: -84.388 },
   mapZoom: 7,
   /** Account Id to focus on the map (opens ticket info window when layer is visible) */
@@ -228,6 +230,9 @@ const mapSlice = (set, get) => ({
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapZoom: (mapZoom) => set({ mapZoom }),
 
+  /** Sets (or clears) the account for the right-panel Last Services strip. */
+  setLastServicesFocus: (lastServicesFocus) => set({ lastServicesFocus }),
+
   /** Selects a HazTrack tank, pans the map when it has coords, and shows the layer. */
   selectHazTrack: (tank) => {
     if (!tank?.Id) return;
@@ -235,9 +240,14 @@ const mapSlice = (set, get) => ({
     const lng = Number(tank.MALongitude);
     const hasLoc = Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)
       && (tank.hasLocation !== false);
+    const accountId = tank.AccountId || null;
+    const lastServicesFocus = accountId
+      ? { accountId, accountName: tank.AccountName || tank.Name || 'Tank' }
+      : null;
     set((s) => ({
       selectedHazTrackId: tank.Id,
       selectedLayerTab: 'haztrack',
+      lastServicesFocus,
       ...(hasLoc ? { mapCenter: { lat, lng }, mapZoom: Math.max(s.mapZoom || 7, 14) } : {}),
       layers: {
         ...s.layers,
