@@ -16,10 +16,10 @@ const NEW_ACCOUNT_UCO_SERVICE_CAP = 3;
 
 /** True when a Service__c row is Deliver Container / CDL. */
 function isCdlService(service) {
-  const rt = service?.RecordType?.Name || service?.RecordTypeName__c || '';
-  return rt === 'Deliver Container';
+  const name = service?.RecordType?.Name || service?.RecordTypeName__c || '';
+  const dev = service?.RecordType?.DeveloperName || service?.RecordTypeDeveloperName__c || '';
+  return name === 'Deliver Container' || dev === 'Tank_Delivered';
 }
-
 /** Normalizes Services__r into raw service rows (jsforce wrapper or array). */
 function rawServices(account) {
   return account?.Services__r?.records || account?.Services__r || [];

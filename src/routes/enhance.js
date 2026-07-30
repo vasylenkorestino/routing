@@ -14,14 +14,18 @@ const { loadEnhanceAddCandidates } = require('../services/enhanceAddCandidates')
 const {
   ACCOUNT_DUE_FIELDS,
   SERVICE_HISTORY_SUBQUERY,
-  evaluateAccount,
-  daysBetween,
 } = require('../modules/serviceDue');
 const {
-  evaluateMustRemainOnRoute,
-  remainReasonLabel,
   applyMustRemainKeepOverride,
 } = require('../modules/routeKeepRules');
+const {
+  indexAccountsById,
+  lookupAccount,
+  resolveStopAccountId,
+  buildEnhanceStopRow,
+  indexStopFactsByAccountId,
+  applyServiceHistoryReasonOverride,
+} = require('../modules/enhanceStopFacts');
 const { enqueueFeedback } = require('../agent/learning/feedbackObserver');
 const logger = require('../utils/logger');
 
@@ -29,7 +33,7 @@ const ANALYZE_SYSTEM = `You are an AI route analyst for a UCO (Used Cooking Oil)
 
 You will receive a JSON object with:
 - route: route header info
-- stops: current stops on the route (with account details, service history, tank info)
+- stops: current stops on the route (with account details, service history, reasonFacts)
 - nearbyAccounts: PRE-FILTERED due accounts (service-due engine) or must-remain new accounts — not already on this route
 
 YOUR TASKS:
@@ -41,7 +45,7 @@ For each item in your output, provide:
 - accountName: the account name
 - action: "keep" | "remove" | "flag" | "add" | "overflow"  (use "overflow" when keeping/adding the stop risks exceeding truck capacity and needs a manager call)
 - confidence: 0-100
-- reason: 1-2 sentence explanation
+- reason: plain English for managers (see REASON FORMAT)
 
 Also provide:
 - summary: overall route analysis (2-3 sentences)
@@ -52,13 +56,21 @@ DECISION FACTORS:
 - Fixed points = always keep
 - mustRemainOnRoute = true → always keep / strong add (new account <3 UCO, or CDL >14 days with no UCO)
 - Overdue = daysOverdue past nextDueDate only. NEVER treat gpdHistorySpanDays (DaysInterval__c) as overdue — it is the GPD history window span.
-- nearbyAccounts are already due or must-remain — prefer higher daysOverdue / estimatedGallonsAtDate; cite lastServiceDate and nextDueDate (or remainReasonLabel) in ADD reasons
+- Prefer KEEP when due === true or mustRemainOnRoute. Never invent missing last UCO when hasUcoHistory / reasonFacts.lastUcoDate is set.
+- 0 gallons means last pickup volume was zero — NOT missing history.
+- NEVER dump camelCase field names (lastServiceDate, ucoServiceCount, nextDueDate) in reason text.
+- nearbyAccounts are already due or must-remain — prefer higher daysOverdue / estimatedGallonsAtDate
 - Prefer inRouteShape then inNeighborShape; same plaza/street as existing stop strengthens an add
 - Open tickets = higher priority to add
 - Consider truck capacity (~1800 gal) — don't exceed with additions
 - Geographic fit — only suggest adds that are along the route path, not major detours
 - Never recommend recently serviced / not-due accounts (already excluded from nearbyAccounts)
 - routeNotes / specialInstructions / driverNotes — respect access and scheduling constraints
+
+REASON FORMAT (required):
+- With history: "Last UCO: Jun 8, 2026 (0 gal). Next due ~Jul 6. Keep — overdue."
+- No history: "No UCO pickups on record. Flag — verify before committing to route."
+- Adds: same style with "Add — …"
 
 Return ONLY valid JSON with this structure:
 {
@@ -90,18 +102,21 @@ router.post('/', async (req, res, next) => {
     const gRoute = route.records[0];
 
     const stopsQuery = `
-      SELECT Id, AccountId__c, Account_Name__c, Container_Address__c, Priority__c,
+      SELECT Id, Account__c, AccountId__c, Account_Name__c, Container_Address__c, Priority__c,
              ServiceType__c, ServiceSubType__c, LastGallonsCollected__c, Notes__c,
              Driver_Notes__c, Status__c, Fixed_point__c, Latitude__c, Longitude__c
       FROM Route__c
-      WHERE Google_Route_Id__c = '${googleRouteId}' AND AccountId__c != null
+      WHERE Google_Route_Id__c = '${googleRouteId}'
+        AND (Account__c != null OR AccountId__c != null)
       ORDER BY Priority__c ASC
     `;
     const stops = await recorder.wrap('Load Stops', 'SOQL', () => conn.query(stopsQuery), {
       input: stopsQuery,
     });
 
-    const accountIds = stops.records.map((s) => s.AccountId__c).filter(Boolean);
+    const accountIds = [...new Set(
+      stops.records.map((s) => resolveStopAccountId(s)).filter(Boolean),
+    )];
     let accounts = [];
     if (accountIds.length > 0) {
       const ids = accountIds.map((id) => `'${id}'`).join(',');
@@ -119,56 +134,24 @@ router.post('/', async (req, res, next) => {
       accounts = acctResult.records;
     }
 
-    const acctMap = {};
-    accounts.forEach((a) => { acctMap[a.Id] = a; });
+    const acctMap = indexAccountsById(accounts);
 
     const serviceDate = String(gRoute.Service_Date__c || '').slice(0, 10)
       || new Date().toISOString().slice(0, 10);
     const remainByAccountId = {};
 
     const stopsData = stops.records.map((s) => {
-      const acct = acctMap[s.AccountId__c] || {};
-      const services = acct.Services__r?.records || [];
-      const svc = evaluateAccount(acct, serviceDate);
-      const remain = evaluateMustRemainOnRoute(acct, serviceDate);
-      if (s.AccountId__c) remainByAccountId[s.AccountId__c] = remain;
-      const daysOverdue = svc.due && svc.nextDueDate
-        ? Math.max(0, daysBetween(svc.nextDueDate, serviceDate))
-        : 0;
-      return {
-        stopId: s.Id,
-        accountId: s.AccountId__c,
-        accountName: s.Account_Name__c,
-        priority: s.Priority__c,
-        serviceType: s.ServiceType__c,
-        lastGallons: s.LastGallonsCollected__c,
-        isFixed: s.Fixed_point__c,
-        lat: s.Latitude__c,
-        lng: s.Longitude__c,
-        tankSize: acct.Tank_Size__c,
-        secondContainer: acct.Second_Container__c,
-        lastServiceDate: svc.lastServiceDate || acct.Last_Service_Date__c,
-        nextDueDate: svc.nextDueDate,
-        effectiveFrequencyDays: svc.effectiveFrequencyDays,
-        daysOverdue,
-        dueReason: svc.reason,
-        mustRemainOnRoute: remain.mustRemainOnRoute,
-        remainReason: remain.remainReason,
-        remainReasonLabel: remainReasonLabel(remain.remainReason),
-        ucoServiceCount: remain.ucoServiceCount,
-        cdlDeliveryDate: remain.cdlDeliveryDate,
-        gpdHistorySpanDays: acct.DaysInterval__c,
-        priorityTier: acct.Priority_Tier__c,
-        routeNotes: acct.Route_Notes__c,
-        specialInstructions: acct.Notes__c,
-        driverNotes: s.Driver_Notes__c,
-        recentServices: services.map((sv) => ({
-          gallons: sv.Qty_Gallons__c,
-          date: sv.Service_Date__c,
-          recordType: sv.RecordType?.Name || null,
-        })),
-      };
+      const accountId = resolveStopAccountId(s);
+      const acct = lookupAccount(acctMap, accountId) || {};
+      const row = buildEnhanceStopRow(s, acct, serviceDate);
+      if (accountId && row._remain) {
+        remainByAccountId[accountId] = row._remain;
+        remainByAccountId[String(accountId).slice(0, 15)] = row._remain;
+      }
+      const { _remain, ...publicRow } = row;
+      return publicRow;
     });
+    const stopFactsByAccountId = indexStopFactsByAccountId(stopsData);
 
     // Due-aware ADD candidates (shape + neighbors, serviceDue hard filter).
     let nearbyAccounts = [];
@@ -221,10 +204,11 @@ router.post('/', async (req, res, next) => {
       return res.status(500).json({ error: 'AI returned invalid JSON', raw: aiText.substring(0, 1000) });
     }
 
-    const existingStops = applyMustRemainKeepOverride(
+    const afterRemain = applyMustRemainKeepOverride(
       analysis.existingStops || analysis.stops || [],
       remainByAccountId,
     );
+    const existingStops = applyServiceHistoryReasonOverride(afterRemain, stopFactsByAccountId);
     const suggestedAdds = analysis.suggestedAdds || analysis.suggestedAccounts || [];
     const summary = analysis.summary || '';
 
@@ -245,7 +229,8 @@ router.post('/', async (req, res, next) => {
     // Address is no longer sent to the AI (token savings) — re-attach it server-side for the UI.
     const addressMap = {};
     for (const s of stops.records) {
-      if (s.AccountId__c) addressMap[s.AccountId__c] = s.Container_Address__c || '';
+      const aid = resolveStopAccountId(s);
+      if (aid) addressMap[aid] = s.Container_Address__c || '';
     }
     for (const a of nearbyAccounts) {
       if (a.accountId && !addressMap[a.accountId]) {

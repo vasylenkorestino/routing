@@ -11,27 +11,40 @@ const { buildMemoryContext } = require('../agent/memory/recall');
 const {
   ACCOUNT_DUE_FIELDS,
   SERVICE_HISTORY_SUBQUERY,
-  evaluateAccount,
-  daysBetween,
 } = require('../modules/serviceDue');
 const {
-  evaluateMustRemainOnRoute,
-  remainReasonLabel,
   applyMustRemainKeepOverride,
 } = require('../modules/routeKeepRules');
+const {
+  indexAccountsById,
+  lookupAccount,
+  resolveStopAccountId,
+  buildEnhanceStopRow,
+  indexStopFactsByAccountId,
+  applyServiceHistoryReasonOverride,
+  formatManagerReason,
+} = require('../modules/enhanceStopFacts');
 const logger = require('../utils/logger');
 
 const TRUCK_CAPACITY_GAL = 1800;
 
 const ANALYZE_STOPS_SYSTEM = `You are an AI route analyst for a UCO collection company. Analyze EXISTING stops only.
 
-Use tank fill %, VIP/fixed points, driver notes, mustRemainOnRoute, and truck capacity (~1800 gal).
+Use tank fill %, VIP/fixed points, driver notes, mustRemainOnRoute, reasonFacts, and truck capacity (~1800 gal).
 
 HARD RULES:
 - VIP/No-fail and fixed points = always keep.
 - mustRemainOnRoute = true → always keep (new account: <3 UCO services, or CDL delivery >14 days ago with no UCO yet).
 - Overdue means daysOverdue / days past nextDueDate from the service-due engine. NEVER treat gpdHistorySpanDays (DaysInterval__c) as overdue or cadence — it is only the GPD history window span.
-- Cite lastServiceDate, nextDueDate, daysOverdue (or mustRemain reason) in each reason.
+- Prefer KEEP when due === true or mustRemainOnRoute. FLAG only for soft operational concerns (access, notes), not invented missing history.
+- Never claim missing last UCO when hasUcoHistory is true or reasonFacts.lastUcoDate is set.
+- lastGallons / reasonFacts.lastUcoGallons of 0 means last pickup volume was zero — NOT missing history.
+- NEVER dump camelCase field names (lastServiceDate, ucoServiceCount, nextDueDate, etc.) in reason text.
+
+REASON FORMAT (required, 1–2 short sentences, plain English for managers):
+- With history: "Last UCO: Jun 8, 2026 (0 gal). Next due ~Jul 6. Keep — overdue."
+- No history: "No UCO pickups on record. Flag — verify before committing to route."
+Use reasonFacts for dates/gallons. Action verb must match your action (Keep|Remove|Flag).
 
 CRITICAL: Reply with ONLY a single JSON object. No markdown fences, no preamble, no commentary.
 {
@@ -48,7 +61,8 @@ Rules:
 - Prefer inRouteShape, then inNeighborShape; avoid large geographic detours from the current stop path.
 - Respect remainingCapacityGal — do not suggest adds that would exceed truck capacity (~1800 gal).
 - Never invent overdue from gpdHistorySpanDays — overdue is daysOverdue past nextDueDate only.
-- In each reason, cite lastServiceDate, nextDueDate (or remainReasonLabel), and estimated gallons.
+- NEVER dump camelCase field names in reason text.
+- Reason format (plain English): "Last UCO: Jun 8, 2026 (45 gal). Next due ~Jul 6. Add — overdue." or use remainReasonLabel in plain words for new accounts.
 - If Agent Memory rules are provided, follow them unless they conflict with hard due/capacity constraints.
 - Return fewer high-quality adds rather than many weak ones. Empty suggestedAdds is OK.
 - If nearbyAccounts is empty, return {"suggestedAdds":[]}.
@@ -116,11 +130,12 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     FROM Google_Route__c WHERE Id = '${googleRouteId}'
   `;
   const stopsQuery = `
-    SELECT Id, AccountId__c, Account_Name__c, Container_Address__c, Priority__c,
+    SELECT Id, Account__c, AccountId__c, Account_Name__c, Container_Address__c, Priority__c,
            ServiceType__c, ServiceSubType__c, LastGallonsCollected__c, Notes__c,
            Driver_Notes__c, Status__c, Fixed_point__c, Latitude__c, Longitude__c
     FROM Route__c
-    WHERE Google_Route_Id__c = '${googleRouteId}' AND AccountId__c != null
+    WHERE Google_Route_Id__c = '${googleRouteId}'
+      AND (Account__c != null OR AccountId__c != null)
     ORDER BY Priority__c ASC
   `;
 
@@ -152,7 +167,9 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   aiJobs.updateProgress(jobId, { step: 'load_locations', label: 'Reviewing service locations…', percent: 20 });
   publishJobProgress(jobId);
 
-  const accountIds = stops.records.map((s) => s.AccountId__c).filter(Boolean);
+  const accountIds = [...new Set(
+    stops.records.map((s) => resolveStopAccountId(s)).filter(Boolean),
+  )];
 
   setStep(jobId, 'load_locations', 'running');
   let accounts = [];
@@ -193,57 +210,26 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
 
   await Promise.all([loadAccounts(), loadNearby()]);
 
-  const acctMap = {};
-  accounts.forEach((a) => { acctMap[a.Id] = a; });
+  const acctMap = indexAccountsById(accounts);
 
   const serviceDate = String(gRoute.Service_Date__c || '').slice(0, 10)
     || new Date().toISOString().slice(0, 10);
 
   const remainByAccountId = {};
   const stopsData = stops.records.map((s) => {
-    const acct = acctMap[s.AccountId__c] || {};
-    const services = acct.Services__r?.records || [];
-    const svc = evaluateAccount(acct, serviceDate);
-    const remain = evaluateMustRemainOnRoute(acct, serviceDate);
-    if (s.AccountId__c) remainByAccountId[s.AccountId__c] = remain;
-    const daysOverdue = svc.due && svc.nextDueDate
-      ? Math.max(0, daysBetween(svc.nextDueDate, serviceDate))
-      : 0;
-    return {
-      stopId: s.Id,
-      accountId: s.AccountId__c,
-      accountName: s.Account_Name__c,
-      priority: s.Priority__c,
-      serviceType: s.ServiceType__c,
-      lastGallons: s.LastGallonsCollected__c,
-      isFixed: s.Fixed_point__c,
-      lat: s.Latitude__c,
-      lng: s.Longitude__c,
-      tankSize: acct.Tank_Size__c,
-      secondContainer: acct.Second_Container__c,
-      lastServiceDate: svc.lastServiceDate || acct.Last_Service_Date__c,
-      nextDueDate: svc.nextDueDate,
-      effectiveFrequencyDays: svc.effectiveFrequencyDays,
-      daysOverdue,
-      dueReason: svc.reason,
-      mustRemainOnRoute: remain.mustRemainOnRoute,
-      remainReason: remain.remainReason,
-      remainReasonLabel: remainReasonLabel(remain.remainReason),
-      ucoServiceCount: remain.ucoServiceCount,
-      cdlDeliveryDate: remain.cdlDeliveryDate,
-      // GPD history span — NOT pickup cadence / overdue days.
-      gpdHistorySpanDays: acct.DaysInterval__c,
-      priorityTier: acct.Priority_Tier__c,
-      routeNotes: acct.Route_Notes__c,
-      specialInstructions: acct.Notes__c,
-      driverNotes: s.Driver_Notes__c,
-      recentServices: services.map((sv) => ({
-        gallons: sv.Qty_Gallons__c,
-        date: sv.Service_Date__c,
-        recordType: sv.RecordType?.Name || null,
-      })),
-    };
+    const accountId = resolveStopAccountId(s);
+    const acct = lookupAccount(acctMap, accountId) || {};
+    const row = buildEnhanceStopRow(s, acct, serviceDate);
+    if (accountId && row._remain) {
+      remainByAccountId[accountId] = row._remain;
+      const key15 = String(accountId).slice(0, 15);
+      if (key15) remainByAccountId[key15] = row._remain;
+    }
+    // Do not send internal remain object to the model.
+    const { _remain, ...publicRow } = row;
+    return publicRow;
   });
+  const stopFactsByAccountId = indexStopFactsByAccountId(stopsData);
 
   const dueDetail = addCandidateStats
     ? `${nearbyAccounts.length} due (of ${addCandidateStats.queried}; ${addCandidateStats.declinedExcluded} declined excluded)`
@@ -275,25 +261,31 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
 
   const stopsText = stopsResponse.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
   const stopsAnalysis = parseJson(stopsText);
-  const existingStops = applyMustRemainKeepOverride(
+  const afterRemain = applyMustRemainKeepOverride(
     stopsAnalysis.existingStops || [],
     remainByAccountId,
   );
+  const existingStops = applyServiceHistoryReasonOverride(afterRemain, stopFactsByAccountId);
   const summary = stopsAnalysis.summary || '';
 
   setStep(jobId, 'analyze_stops', 'done');
   const flagged = existingStops.filter((s) => s.action === 'remove' || s.action === 'flag').length;
   const remainForced = existingStops.filter((s) => s._remainOverride).length;
+  const historyRewrites = existingStops.filter((s) => s._historyReasonOverride).length;
   aiJobs.addFinding(jobId, `Reviewed ${existingStops.length} stops — ${flagged} flagged for review`);
   if (remainForced) {
     aiJobs.addFinding(jobId, `Forced KEEP on ${remainForced} new-account/CDL stops`);
+  }
+  if (historyRewrites) {
+    aiJobs.addFinding(jobId, `Normalized ${historyRewrites} stop reasons from UCO service history`);
   }
 
   // Stage 1: persist stop recommendations immediately so the UI/map can show them
   // while add-candidate analysis continues in the background.
   const addressMap = {};
   for (const s of stops.records) {
-    if (s.AccountId__c) addressMap[s.AccountId__c] = s.Container_Address__c || '';
+    const aid = resolveStopAccountId(s);
+    if (aid) addressMap[aid] = s.Container_Address__c || '';
   }
 
   setStep(jobId, 'save_stop_logs', 'running');
@@ -497,4 +489,6 @@ module.exports = {
   ANALYZE_ADDS_SYSTEM,
   parseJson,
   applyMustRemainKeepOverride,
+  applyServiceHistoryReasonOverride,
+  formatManagerReason,
 };

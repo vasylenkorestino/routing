@@ -36,10 +36,11 @@ const ACCOUNT_DUE_FIELDS =
 /**
  * Services__r subquery: UCO Collection + Deliver Container (CDL).
  * Due/fill-rate use UCO only; CDL is for new-account remain-on-route rules.
+ * Filters by DeveloperName (stable) rather than label.
  */
 const SERVICE_HISTORY_SUBQUERY =
-  "(SELECT Id, Service_Date__c, Qty_Gallons__c, RecordType.Name FROM Services__r " +
-  "WHERE RecordType.Name IN ('UCO Collection', 'Deliver Container') AND Service_Date__c != null " +
+  "(SELECT Id, Service_Date__c, Qty_Gallons__c, RecordType.Name, RecordType.DeveloperName FROM Services__r " +
+  "WHERE RecordType.DeveloperName IN ('WVO_Collection', 'Tank_Delivered') AND Service_Date__c != null " +
   "ORDER BY Service_Date__c DESC LIMIT 20)";
 
 /* ── date helpers ─────────────────────────────────────────── */
@@ -109,10 +110,12 @@ function parseFrequencyDays(account) {
 
 /** True when a Service__c row is a UCO Collection (excludes CDL / Deliver Container). */
 function isUcoCollectionService(service) {
-  const rt = service?.RecordType?.Name || service?.RecordTypeName__c || '';
+  const name = service?.RecordType?.Name || service?.RecordTypeName__c || '';
+  const dev = service?.RecordType?.DeveloperName || service?.RecordTypeDeveloperName__c || '';
+  if (dev === 'WVO_Collection' || name === 'UCO Collection') return true;
   // Legacy SOQL without RecordType defaults to UCO-only history.
-  if (!rt) return true;
-  return rt === 'UCO Collection';
+  if (!name && !dev) return true;
+  return false;
 }
 
 /**
