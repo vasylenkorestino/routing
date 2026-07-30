@@ -16,6 +16,9 @@ const NEW_ACCOUNT_UCO_SERVICE_CAP = 3;
 
 /** True when a Service__c row is Deliver Container / CDL. */
 function isCdlService(service) {
+  const code = service?.Code__c || '';
+  if (code === 'CDL') return true;
+  if (code === 'UCO') return false;
   const name = service?.RecordType?.Name || service?.RecordTypeName__c || '';
   const dev = service?.RecordType?.DeveloperName || service?.RecordTypeDeveloperName__c || '';
   return name === 'Deliver Container' || dev === 'Tank_Delivered';

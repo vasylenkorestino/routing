@@ -7,6 +7,7 @@ const {
   parsePicklistFrequencyDays,
   parseFrequencyDays,
   isOnCall,
+  isUcoCollectionService,
   extractServiceHistory,
   estimateFrequencyFromHistory,
   parseTankCapacity,
@@ -14,6 +15,7 @@ const {
   resolveLastServiceDate,
   estimateGallonsAtDate,
   evaluateAccount,
+  SERVICE_HISTORY_SUBQUERY,
 } = require('./serviceDue');
 
 function test(name, fn) {
@@ -28,8 +30,43 @@ function test(name, fn) {
 
 /** Builds a Services__r-shaped subquery result from [date, gallons] pairs. */
 function services(...pairs) {
-  return { records: pairs.map(([date, gallons]) => ({ Service_Date__c: date, Qty_Gallons__c: gallons })) };
+  return {
+    records: pairs.map(([date, gallons]) => ({
+      Service_Date__c: date,
+      Qty_Gallons__c: gallons,
+      Code__c: 'UCO',
+    })),
+  };
 }
+
+test('SERVICE_HISTORY_SUBQUERY filters by Code__c UCO/CDL', () => {
+  assert.match(SERVICE_HISTORY_SUBQUERY, /Code__c = 'UCO'/);
+  assert.match(SERVICE_HISTORY_SUBQUERY, /Code__c = 'CDL'/);
+  assert.match(SERVICE_HISTORY_SUBQUERY, /\bCode__c\b/);
+});
+
+test('isUcoCollectionService prefers Code__c', () => {
+  assert.equal(isUcoCollectionService({ Code__c: 'UCO', Service_Date__c: '2026-06-01' }), true);
+  assert.equal(isUcoCollectionService({ Code__c: 'CDL', Service_Date__c: '2026-06-01' }), false);
+  assert.equal(
+    isUcoCollectionService({ RecordType: { Name: 'UCO Collection' }, Service_Date__c: '2026-06-01' }),
+    true,
+  );
+});
+
+test('extractServiceHistory keeps Code__c UCO and drops CDL', () => {
+  const hist = extractServiceHistory({
+    Services__r: {
+      records: [
+        { Service_Date__c: '2026-06-01', Qty_Gallons__c: 40, Code__c: 'UCO' },
+        { Service_Date__c: '2026-05-01', Qty_Gallons__c: null, Code__c: 'CDL' },
+      ],
+    },
+  });
+  assert.equal(hist.length, 1);
+  assert.equal(hist[0].date, '2026-06-01');
+  assert.equal(hist[0].gallons, 40);
+});
 
 /* ── frequency picklist parsing ───────────────────────────── */
 

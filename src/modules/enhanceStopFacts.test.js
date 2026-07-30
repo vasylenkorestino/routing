@@ -26,12 +26,13 @@ function test(name, fn) {
   }
 }
 
-/** Builds Services__r with optional RecordType Name / DeveloperName. */
+/** Builds Services__r with Code__c + optional RecordType Name / DeveloperName. */
 function services(...rows) {
   return {
     records: rows.map(([date, gallons, recordType = 'UCO Collection', developerName]) => ({
       Service_Date__c: date,
       Qty_Gallons__c: gallons,
+      Code__c: recordType === 'Deliver Container' ? 'CDL' : 'UCO',
       RecordType: {
         Name: recordType,
         DeveloperName: developerName
@@ -135,6 +136,7 @@ test('buildEnhanceStopRow joins when Services__r is a plain array', () => {
       {
         Service_Date__c: '2026-06-08',
         Qty_Gallons__c: 45,
+        Code__c: 'UCO',
         RecordType: { Name: 'UCO Collection', DeveloperName: 'WVO_Collection' },
       },
     ],

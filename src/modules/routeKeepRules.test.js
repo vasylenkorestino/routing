@@ -20,12 +20,13 @@ function test(name, fn) {
   }
 }
 
-/** Builds Services__r with optional RecordType.Name. */
+/** Builds Services__r with Code__c + optional RecordType.Name. */
 function services(...rows) {
   return {
     records: rows.map(([date, gallons, recordType = 'UCO Collection']) => ({
       Service_Date__c: date,
       Qty_Gallons__c: gallons,
+      Code__c: recordType === 'Deliver Container' ? 'CDL' : 'UCO',
       RecordType: { Name: recordType },
     })),
   };
@@ -103,6 +104,20 @@ test('CDL is excluded from UCO service count', () => {
   );
   assert.equal(res.ucoServiceCount, 1);
   assert.equal(res.mustRemainOnRoute, true);
+});
+
+test('Code__c CDL alone (no RecordType) forces remain when older than 14 days', () => {
+  const res = evaluateMustRemainOnRoute(
+    {
+      Services__r: {
+        records: [{ Service_Date__c: '2026-07-01', Qty_Gallons__c: null, Code__c: 'CDL' }],
+      },
+    },
+    '2026-07-20',
+  );
+  assert.equal(res.mustRemainOnRoute, true);
+  assert.equal(res.ucoServiceCount, 0);
+  assert.equal(res.cdlDeliveryDate, '2026-07-01');
 });
 
 test('applyMustRemainKeepOverride forces remove/flag → keep', () => {
