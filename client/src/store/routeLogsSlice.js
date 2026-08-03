@@ -103,10 +103,16 @@ const routeLogsSlice = (set, get) => ({
   resolveRouteLogs: async (items) => {
     if (!items?.length) return null;
     const ids = items.map((i) => i.logId);
+    const membershipChange = items.some((i) => i.outcome === 'remove' || i.outcome === 'add');
+    // Bulk or membership-changing approve: skip SSE stop patches until one final refresh.
+    const suppressPatches = items.length > 1 || membershipChange;
     set((s) => {
       const next = { ...s.routeLogsApproving };
       ids.forEach((id) => { next[id] = true; });
-      return { routeLogsApproving: next };
+      return {
+        routeLogsApproving: next,
+        ...(suppressPatches ? { suppressRouteStopPatches: true } : {}),
+      };
     });
     try {
       const payload = items.map(({ logId, outcome, comment }) => ({
@@ -142,13 +148,26 @@ const routeLogsSlice = (set, get) => ({
           routeLogFocusedId: ids.includes(s.routeLogFocusedId) ? null : s.routeLogFocusedId,
         };
       });
-      if (res?.added?.length || res?.removed?.length) get().refreshRoutes?.();
+      if (res?.added?.length || res?.removed?.length) {
+        // Clear stale polylines for affected routes, then one refresh (no per-stop rebuild).
+        const idSet = new Set(ids);
+        const routeIds = new Set();
+        if (get().routeId) routeIds.add(get().routeId);
+        (get().routeLogs || []).forEach((l) => {
+          if (idSet.has(l.Id) && l.Google_Route__c) routeIds.add(l.Google_Route__c);
+        });
+        routeIds.forEach((rid) => get().invalidateRoutePolyline?.(rid));
+        await get().refreshRoutes?.();
+      }
       return res;
     } finally {
       set((s) => {
         const next = { ...s.routeLogsApproving };
         ids.forEach((id) => { next[id] = false; });
-        return { routeLogsApproving: next };
+        return {
+          routeLogsApproving: next,
+          ...(suppressPatches ? { suppressRouteStopPatches: false } : {}),
+        };
       });
     }
   },

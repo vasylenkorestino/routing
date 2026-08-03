@@ -81,14 +81,15 @@ function useDrivingPaths(routeId, startPt, endPt, stops, hasPolyline) {
 
     if (hasPolyline) {
       if (startPt) {
-        const key = `s_${routeId}_${startKey}`;
+        // Include first-stop coords so spur cache invalidates when first stop changes.
+        const key = `s_${routeId}_${startKey}_${firstStop.lat},${firstStop.lng}`;
         if (drivingCache[key]) { setStartPath(drivingCache[key]); }
         else {
           requestDrivingPath(startPt, firstStop).then((p) => { drivingCache[key] = p; setStartPath(p); });
         }
       }
       if (endPt) {
-        const key = `e_${routeId}_${endKey}`;
+        const key = `e_${routeId}_${endKey}_${lastStop.lat},${lastStop.lng}`;
         if (drivingCache[key]) { setEndPath(drivingCache[key]); }
         else {
           requestDrivingPath(lastStop, endPt).then((p) => { drivingCache[key] = p; setEndPath(p); });

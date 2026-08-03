@@ -97,6 +97,12 @@ const routingSlice = (set, get) => ({
    * Gates selectNewRoute so another user's create (SSE) never steals focus.
    */
   expectingLocalNewRoutes: false,
+
+  /**
+   * When true, skip SSE-driven Route__c stop patches so bulk approve can
+   * finish all deletes before a single map refresh.
+   */
+  suppressRouteStopPatches: false,
   beginLocalRouteCreate: () => set({ expectingLocalNewRoutes: true }),
   endLocalRouteCreate: () => set({ expectingLocalNewRoutes: false }),
 
@@ -413,6 +419,7 @@ const routingSlice = (set, get) => ({
     if (object === 'google_route') {
       applyGoogleRoutePatch(set, get, event, record);
     } else if (object === 'route') {
+      if (get().suppressRouteStopPatches) return;
       applyRouteStopPatch(set, get, event, record);
     }
   },
@@ -517,7 +524,8 @@ function applyRouteStopPatch(set, get, event, record) {
   if (event === 'deleted') {
     const filtered = stops.filter((s) => getId(s) !== stopId);
     if (filtered.length === stops.length) return;
-    const updatedParent = withPreparedStops(parent, filtered);
+    // Drop stale Polyline__c so the map does not keep the old path over removed stops.
+    const updatedParent = { ...withPreparedStops(parent, filtered), Polyline__c: null };
     const next = current.map((r, i) => (i === parentIdx ? updatedParent : r));
     set({ routes: next, route: get().routeId === parentId ? updatedParent : get().route });
     if (get().setLayerData) get().setLayerData('routes', next);

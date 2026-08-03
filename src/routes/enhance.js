@@ -587,16 +587,39 @@ router.post('/approve', async (req, res, next) => {
       }
     }
 
+    // Batch-collect Route__c Ids, then one destroy — fewer SF events / map patches.
     const removed = [];
+    const pairToLogIds = new Map(); // `${gRoute}|${account}` -> [logId]
+    const gRouteIds = new Set();
+    const accountIds = new Set();
     for (const id of removeIds) {
       const log = logsById[id];
       if (!log?.Account__c || !log?.Google_Route__c) continue;
+      const key = `${log.Google_Route__c}|${log.Account__c}`;
+      if (!pairToLogIds.has(key)) pairToLogIds.set(key, []);
+      pairToLogIds.get(key).push(id);
+      gRouteIds.add(log.Google_Route__c);
+      accountIds.add(log.Account__c);
+    }
+    if (pairToLogIds.size) {
+      const rList = [...gRouteIds].map((id) => `'${id}'`).join(',');
+      const aList = [...accountIds].map((id) => `'${id}'`).join(',');
       const pts = await conn.query(
-        `SELECT Id FROM Route__c WHERE GRoute_Id__c = '${log.Google_Route__c}' AND AccountId__c = '${log.Account__c}'`
+        `SELECT Id, GRoute_Id__c, AccountId__c FROM Route__c
+         WHERE GRoute_Id__c IN (${rList}) AND AccountId__c IN (${aList})`,
       );
-      if (pts.records?.length) {
-        await conn.sobject('Route__c').destroy(pts.records.map((p) => p.Id));
-        removed.push(id);
+      const stopIdsToDestroy = [];
+      for (const rec of pts.records || []) {
+        const key = `${rec.GRoute_Id__c}|${rec.AccountId__c}`;
+        const logIds = pairToLogIds.get(key);
+        if (!logIds) continue; // IN filter can return extra cross-products
+        stopIdsToDestroy.push(rec.Id);
+        logIds.forEach((lid) => {
+          if (!removed.includes(lid)) removed.push(lid);
+        });
+      }
+      if (stopIdsToDestroy.length) {
+        await conn.sobject('Route__c').destroy(stopIdsToDestroy);
       }
     }
 
