@@ -8,10 +8,8 @@ const { analyzeRouteCompare } = require('../modules/routeCompare');
 const { saveEnhanceLogs } = require('./saveEnhanceLogs');
 const { loadEnhanceAddCandidates } = require('./enhanceAddCandidates');
 const { buildMemoryContext } = require('../agent/memory/recall');
-const {
-  ACCOUNT_DUE_FIELDS,
-  SERVICE_HISTORY_SUBQUERY,
-} = require('../modules/serviceDue');
+const { ACCOUNT_DUE_FIELDS } = require('../modules/serviceDue');
+const { withServiceHistory } = require('../modules/serviceHistoryLoader');
 const {
   applyMustRemainKeepOverride,
 } = require('../modules/routeKeepRules');
@@ -185,12 +183,16 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
       SELECT Id, Name, Last_Service_Date__c, DaysInterval__c,
              Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
              MALatitude__c, MALongitude__c, Ignore_For_Routing__c,
-             ${ACCOUNT_DUE_FIELDS},
-             ${SERVICE_HISTORY_SUBQUERY}
+             ${ACCOUNT_DUE_FIELDS}
       FROM Account WHERE Id IN (${ids})
     `;
     const acctResult = await recorder.wrap('Load Accounts', 'SOQL', () => conn.query(acctQuery), { input: acctQuery });
-    accounts = acctResult.records;
+    accounts = await recorder.wrap(
+      'Load Service History',
+      'SOQL',
+      () => withServiceHistory(conn, acctResult.records),
+      { input: { accounts: acctResult.records.length } },
+    );
   };
 
   const loadNearby = async () => {
@@ -216,10 +218,14 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     || new Date().toISOString().slice(0, 10);
 
   const remainByAccountId = {};
+  const unjoinedAccountIds = [];
+  const noHistoryAccountIds = [];
   const stopsData = stops.records.map((s) => {
     const accountId = resolveStopAccountId(s);
     const acct = lookupAccount(acctMap, accountId) || {};
+    if (!acct.Id) unjoinedAccountIds.push(accountId || s.Id);
     const row = buildEnhanceStopRow(s, acct, serviceDate);
+    if (acct.Id && !row.hasUcoHistory) noHistoryAccountIds.push(accountId);
     if (accountId && row._remain) {
       remainByAccountId[accountId] = row._remain;
       const key15 = String(accountId).slice(0, 15);
@@ -230,6 +236,28 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     return publicRow;
   });
   const stopFactsByAccountId = indexStopFactsByAccountId(stopsData);
+
+  // Surface data-quality gaps: a failed join or empty history is what previously
+  // turned into a silent (and wrong) "No UCO pickups on record".
+  if (unjoinedAccountIds.length) {
+    logger.warn('Enhance: stop accounts failed to join', {
+      googleRouteId: gRoute.Id,
+      count: unjoinedAccountIds.length,
+      accountIds: unjoinedAccountIds,
+    });
+    aiJobs.addFinding(
+      jobId,
+      `${unjoinedAccountIds.length} stop(s) had no Account record — history unverified, flagged for review`,
+    );
+  }
+  if (noHistoryAccountIds.length) {
+    logger.info('Enhance: stop accounts with no UCO/CDL history', {
+      googleRouteId: gRoute.Id,
+      count: noHistoryAccountIds.length,
+      accountIds: noHistoryAccountIds,
+    });
+    aiJobs.addFinding(jobId, `${noHistoryAccountIds.length} stop(s) have no UCO service history on file`);
+  }
 
   const dueDetail = addCandidateStats
     ? `${nearbyAccounts.length} due (of ${addCandidateStats.queried}; ${addCandidateStats.declinedExcluded} declined excluded)`

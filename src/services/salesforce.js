@@ -49,13 +49,15 @@ async function query(soql) {
   logger.info('SOQL query', { soql: soql.substring(0, 200) });
   const result = await conn.query(soql);
 
-  if (result.totalSize > 2000 && !result.done) {
+  // Page whenever Salesforce reports more batches. Subqueries shrink the batch
+  // to 200 records, so gating on totalSize would silently drop the remainder.
+  if (result.done === false) {
     let records = result.records;
     let nextRecordsUrl = result.nextRecordsUrl;
     while (nextRecordsUrl) {
       const more = await conn.queryMore(nextRecordsUrl);
       records = records.concat(more.records);
-      nextRecordsUrl = more.nextRecordsUrl;
+      nextRecordsUrl = more.done === false ? more.nextRecordsUrl : null;
     }
     return records;
   }

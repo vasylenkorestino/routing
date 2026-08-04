@@ -76,9 +76,17 @@ function actionVerb(action) {
   return 'Flag';
 }
 
+/** Reason text when the account row never arrived, so history is unknown. */
+const HISTORY_UNAVAILABLE_REASON =
+  'Service history unavailable. Flag — verify in Salesforce before routing.';
+
+/** AI phrasings that claim there is no history — never valid when unverified. */
+const NO_HISTORY_CLAIM_RE = /no uco pickups|no service (date|history)/i;
+
 /** Short why clause from engine facts (no field names). */
 function deriveWhy(facts, action) {
   if (!facts) return 'needs manager review';
+  if (facts.historyUnavailable) return 'verify in Salesforce before routing';
   if (facts.mustRemainOnRoute) {
     if (facts.remainReasonLabel?.toLowerCase().includes('cdl')) {
       return 'awaiting first UCO pickup';
@@ -106,6 +114,9 @@ function deriveWhy(facts, action) {
  * Example: "Last UCO: Jun 8, 2026 (0 gal). Next due ~Jul 6. Keep — overdue."
  */
 function formatManagerReason(facts, action, whyOverride) {
+  // Unknown history must never be reported as "no pickups on record".
+  if (facts?.historyUnavailable) return HISTORY_UNAVAILABLE_REASON;
+
   const verb = actionVerb(action);
   const why = (whyOverride && String(whyOverride).trim()) || deriveWhy(facts, action);
 
@@ -135,6 +146,9 @@ function buildEnhanceStopRow(stop, account, serviceDate) {
   const remain = evaluateMustRemainOnRoute(acct, serviceDate);
   const history = extractServiceHistory(acct);
   const hasUcoHistory = history.length > 0;
+  // No account row means the join failed (or the record was not returned), so
+  // history was never read — that is not the same as "this account has none".
+  const historyUnavailable = !acct.Id;
 
   // Newest UCO gallons (including 0); else Route LastGallonsCollected__c.
   let lastGallons = stop?.LastGallonsCollected__c;
@@ -158,6 +172,7 @@ function buildEnhanceStopRow(stop, account, serviceDate) {
     daysOverdue,
     due: !!svc.due,
     hasUcoHistory,
+    historyUnavailable,
     mustRemainOnRoute: !!remain.mustRemainOnRoute,
     isFixed: !!stop?.Fixed_point__c,
     isVip,
@@ -186,6 +201,7 @@ function buildEnhanceStopRow(stop, account, serviceDate) {
     due: !!svc.due,
     dueReason: svc.reason || null,
     hasUcoHistory,
+    historyUnavailable,
     mustRemainOnRoute: remain.mustRemainOnRoute,
     remainReason: remain.remainReason,
     remainReasonLabel: remainReasonLabel(remain.remainReason),
@@ -224,6 +240,7 @@ function indexStopFactsByAccountId(stopsData = []) {
       },
       due: s.due,
       hasUcoHistory: s.hasUcoHistory,
+      historyUnavailable: s.historyUnavailable,
       isFixed: s.isFixed,
       isVip: s.reasonFacts?.isVip,
     };
@@ -252,6 +269,19 @@ function applyServiceHistoryReasonOverride(existingStops = [], factsByAccountId 
         return {
           ...rec,
           reason: 'Needs manager review — service details unavailable.',
+          _historyReasonOverride: true,
+        };
+      }
+      return rec;
+    }
+
+    // History was never read — the AI cannot be allowed to claim there is none.
+    if (facts.historyUnavailable) {
+      if (NO_HISTORY_CLAIM_RE.test(String(rec.reason || '')) || looksCrypticReason(rec.reason)) {
+        return {
+          ...rec,
+          action: 'flag',
+          reason: HISTORY_UNAVAILABLE_REASON,
           _historyReasonOverride: true,
         };
       }
@@ -327,6 +357,7 @@ function stripFieldNames(text) {
 }
 
 module.exports = {
+  HISTORY_UNAVAILABLE_REASON,
   normalizeSfId,
   indexAccountsById,
   lookupAccount,

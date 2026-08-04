@@ -3,6 +3,7 @@ const sf = require('../services/salesforce');
 const { redactFreeText } = require('../utils/aiDataPolicy');
 const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 const serviceDue = require('../modules/serviceDue');
+const { withServiceHistoryForAccounts } = require('../modules/serviceHistoryLoader');
 
 /**
  * Finds accounts that actually need UCO service by the target date.
@@ -59,7 +60,6 @@ class AccountDiscoverySkill extends BaseSkill {
       'Last_Service_Date__c, Expected_Date_Of_Service__c, ' +
       `${serviceDue.ACCOUNT_DUE_FIELDS}, ` +
       'Interval__c, Ignore_For_Routing__c, UCO_Collection__c, Rotisserie_Collection__c, Route_Notes__c, Notes__c, ' +
-      `${serviceDue.SERVICE_HISTORY_SUBQUERY}, ` +
       '(SELECT Id, Subject, Type, Status FROM Cases WHERE Status = \'Open\' AND Type = \'UCO Collection\' ORDER BY CreatedDate DESC) ' +
       'FROM Account ' +
       `WHERE ${accountRoutingFilterClause()} ` +
@@ -74,6 +74,7 @@ class AccountDiscoverySkill extends BaseSkill {
     let accounts = await sf.query(soql);
 
     accounts = accounts.filter((a) => !routedIds.has(a.Id));
+    accounts = await withServiceHistoryForAccounts(accounts);
 
     // Per-account due evaluation — only accounts that actually need service pass.
     const skippedByReason = {};

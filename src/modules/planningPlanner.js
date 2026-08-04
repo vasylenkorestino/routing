@@ -20,6 +20,7 @@
 const { loadDepots, bearing, sectorFor } = require('./serviceLocationPlanner');
 const sf = require('../services/salesforce');
 const serviceDue = require('./serviceDue');
+const { withServiceHistoryForAccounts } = require('./serviceHistoryLoader');
 const routeOptimizer = require('./routeOptimizer');
 const { haversine } = require('./distanceMatrix');
 const logger = require('../utils/logger');
@@ -124,7 +125,6 @@ const ACCOUNT_FIELDS =
   'Last_Service_Date__c, UCOLastServiceDate__c, Expected_Date_Of_Service__c, Equipment_Type__c, ' +
   'Tank_Size__c, Container_Size_number__c, ContainerCapacity__c, Estimated_GPM__c, Number_Of_Fryers__c, ' +
   'Pickup_Frequency_in_Days__c, Estimated_Pickup_Frequency__c, RelatedServiceLocation__c, ' +
-  `${serviceDue.SERVICE_HISTORY_SUBQUERY}, ` +
   "(SELECT Id, Subject, Type FROM Cases WHERE Status = 'Open' AND Type = 'UCO Collection' ORDER BY CreatedDate DESC LIMIT 3)";
 
 /** Attaches the derived flags the planner reasons about (tickets, service history). */
@@ -179,7 +179,7 @@ async function discoverAccounts({ dateFrom, dateTo, recordType, anchor = null, r
   }
   soql += 'ORDER BY UCOLastServiceDate__c ASC NULLS FIRST LIMIT 5000';
 
-  const rows = await sf.query(soql);
+  const rows = await withServiceHistoryForAccounts(await sf.query(soql));
 
   const candidates = rows
     .filter((a) => !alreadyRouted.has(a.Id))
@@ -211,7 +211,9 @@ async function fetchAccountsByIds(ids) {
   const safe = [...new Set((ids || []).map((id) => safeId(id)))];
   if (safe.length === 0) return [];
   const idList = safe.map((id) => `'${id}'`).join(',');
-  const rows = await sf.query(`SELECT ${ACCOUNT_FIELDS} FROM Account WHERE Id IN (${idList})`);
+  const rows = await withServiceHistoryForAccounts(
+    await sf.query(`SELECT ${ACCOUNT_FIELDS} FROM Account WHERE Id IN (${idList})`),
+  );
   return rows.map(decorateAccount);
 }
 

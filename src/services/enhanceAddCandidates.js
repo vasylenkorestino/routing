@@ -7,10 +7,10 @@
 const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 const {
   ACCOUNT_DUE_FIELDS,
-  SERVICE_HISTORY_SUBQUERY,
   evaluateAccount,
   daysBetween,
 } = require('../modules/serviceDue');
+const { withServiceHistory } = require('../modules/serviceHistoryLoader');
 const { evaluateMustRemainOnRoute, remainReasonLabel } = require('../modules/routeKeepRules');
 
 const BBOX_PAD = 0.15;
@@ -88,8 +88,7 @@ function candidateSelectClause() {
     MALatitude__c, MALongitude__c, Last_Service_Date__c, DaysInterval__c,
     Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
     Ignore_For_Routing__c, Rotisserie_Collection__c, Shape__c, Shape_Name__c,
-    ${ACCOUNT_DUE_FIELDS},
-    ${SERVICE_HISTORY_SUBQUERY}
+    ${ACCOUNT_DUE_FIELDS}
   `;
 }
 
@@ -136,7 +135,7 @@ async function queryCandidateAccounts(conn, {
     LIMIT ${SOQL_LIMIT}
   `;
   const res = await conn.query(q);
-  return res.records || [];
+  return withServiceHistory(conn, res.records || []);
 }
 
 /** True when Reason__c is an AI Enhance ADD recommendation. */

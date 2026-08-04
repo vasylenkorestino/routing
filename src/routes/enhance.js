@@ -11,10 +11,8 @@ const { publishJobProgress } = require('../services/aiJobPublisher');
 const { runEnhancePipeline, ANALYZE_STOPS_SYSTEM } = require('../services/enhancePipeline');
 const { saveEnhanceLogs } = require('../services/saveEnhanceLogs');
 const { loadEnhanceAddCandidates } = require('../services/enhanceAddCandidates');
-const {
-  ACCOUNT_DUE_FIELDS,
-  SERVICE_HISTORY_SUBQUERY,
-} = require('../modules/serviceDue');
+const { ACCOUNT_DUE_FIELDS } = require('../modules/serviceDue');
+const { withServiceHistory } = require('../modules/serviceHistoryLoader');
 const {
   applyMustRemainKeepOverride,
 } = require('../modules/routeKeepRules');
@@ -124,14 +122,18 @@ router.post('/', async (req, res, next) => {
         SELECT Id, Name, Last_Service_Date__c, DaysInterval__c,
                Second_Container__c, Priority_Tier__c, Route_Notes__c, Notes__c,
                MALatitude__c, MALongitude__c, Ignore_For_Routing__c,
-               ${ACCOUNT_DUE_FIELDS},
-               ${SERVICE_HISTORY_SUBQUERY}
+               ${ACCOUNT_DUE_FIELDS}
         FROM Account WHERE Id IN (${ids})
       `;
       const acctResult = await recorder.wrap('Load Accounts', 'SOQL', () => conn.query(acctQuery), {
         input: acctQuery,
       });
-      accounts = acctResult.records;
+      accounts = await recorder.wrap(
+        'Load Service History',
+        'SOQL',
+        () => withServiceHistory(conn, acctResult.records),
+        { input: { accounts: acctResult.records.length } },
+      );
     }
 
     const acctMap = indexAccountsById(accounts);

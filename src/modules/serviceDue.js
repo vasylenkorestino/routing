@@ -33,16 +33,6 @@ const ACCOUNT_DUE_FIELDS =
   'UCOLastServiceDate__c, Estimated_Pickup_Frequency__c, Pickup_Frequency_in_Days__c, ' +
   'Tank_Size__c, ContainerCapacity__c, Container_Size_number__c, Estimated_GPM__c';
 
-/**
- * Services__r subquery: UCO Collection + Deliver Container (CDL).
- * Due/fill-rate use UCO only; CDL is for new-account remain-on-route rules.
- * Filters by Code__c (org convention: UCO / CDL).
- */
-const SERVICE_HISTORY_SUBQUERY =
-  "(SELECT Id, Service_Date__c, Qty_Gallons__c, Code__c, RecordType.Name, RecordType.DeveloperName FROM Services__r " +
-  "WHERE (Code__c = 'UCO' OR Code__c = 'CDL') AND Service_Date__c != null " +
-  "ORDER BY Service_Date__c DESC LIMIT 20)";
-
 /* ── date helpers ─────────────────────────────────────────── */
 
 function toISODate(d) {
@@ -122,9 +112,10 @@ function isUcoCollectionService(service) {
 }
 
 /**
- * Normalizes the Services__r subquery result (jsforce { records } wrapper or a
- * plain array) into UCO Collection rows [{ date, gallons }], newest first.
+ * Normalizes attached service history (jsforce { records } wrapper or a plain
+ * array) into UCO Collection rows [{ date, gallons }], newest first.
  * Deliver Container (CDL) rows are excluded from due/fill-rate math.
+ * History is attached by serviceHistoryLoader.attachServiceHistory.
  */
 function extractServiceHistory(account) {
   const raw = account?.Services__r?.records || account?.Services__r || [];
@@ -332,7 +323,6 @@ function evaluateAccount(account, dateFrom, dateTo) {
 module.exports = {
   FREQUENCY_BUCKETS,
   ACCOUNT_DUE_FIELDS,
-  SERVICE_HISTORY_SUBQUERY,
   parsePicklistFrequencyDays,
   parseFrequencyDays,
   isOnCall,

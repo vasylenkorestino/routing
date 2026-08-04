@@ -4,6 +4,7 @@
  */
 const assert = require('assert');
 const {
+  HISTORY_UNAVAILABLE_REASON,
   normalizeSfId,
   indexAccountsById,
   lookupAccount,
@@ -248,6 +249,56 @@ test('not-due history allows remove with plain English (not no-history)', () => 
   assert.equal(out[0].action, 'remove');
   assert.match(out[0].reason, /^Last UCO:/);
   assert.match(out[0].reason, /Remove — not due yet/);
+});
+
+test('missing account row reports history unavailable, never "no pickups"', () => {
+  const acctId = '001MISSING00000';
+  // Account was not returned by the query → join yields an empty object.
+  const row = buildEnhanceStopRow(
+    { Id: 'a0R6', AccountId__c: acctId, Account_Name__c: 'Red Wok' },
+    {},
+    '2026-07-30',
+  );
+  assert.equal(row.historyUnavailable, true);
+  assert.equal(row.reasonFacts.historyUnavailable, true);
+
+  const { _remain, ...publicRow } = row;
+  const factsById = indexStopFactsByAccountId([publicRow]);
+
+  const out = applyServiceHistoryReasonOverride(
+    [{
+      accountId: acctId,
+      action: 'flag',
+      confidence: 40,
+      reason: 'Red Wok: No UCO pickups on record and no last service date on file.',
+    }],
+    factsById,
+  );
+
+  assert.equal(out[0]._historyReasonOverride, true);
+  assert.equal(out[0].action, 'flag');
+  assert.equal(out[0].reason, HISTORY_UNAVAILABLE_REASON);
+  assert.doesNotMatch(out[0].reason, /No UCO pickups/i);
+});
+
+test('formatManagerReason never claims no history when unavailable', () => {
+  const reason = formatManagerReason(
+    { hasUcoHistory: false, historyUnavailable: true },
+    'remove',
+    'not due yet',
+  );
+  assert.equal(reason, HISTORY_UNAVAILABLE_REASON);
+});
+
+test('joined account with genuinely empty history still reports no pickups', () => {
+  const row = buildEnhanceStopRow(
+    { Id: 'a0R7', AccountId__c: '001EMPTY0000000', Account_Name__c: 'Brand New' },
+    { Id: '001EMPTY0000000', Services__r: { records: [] } },
+    '2026-07-30',
+  );
+  assert.equal(row.historyUnavailable, false);
+  assert.equal(row.hasUcoHistory, false);
+  assert.match(formatManagerReason(row.reasonFacts, 'flag'), /^No UCO pickups on record\./);
 });
 
 console.log('\nAll enhanceStopFacts tests passed.');

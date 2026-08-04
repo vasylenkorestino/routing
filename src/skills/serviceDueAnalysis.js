@@ -2,6 +2,7 @@ const BaseSkill = require('./base');
 const sf = require('../services/salesforce');
 const { accountRoutingFilterClause } = require('../utils/accountRoutingFilters');
 const serviceDue = require('../modules/serviceDue');
+const { withServiceHistoryForAccounts } = require('../modules/serviceHistoryLoader');
 
 const MAX_ACCOUNT_IDS = 500;
 const CANDIDATE_LIMIT = 4000;
@@ -64,8 +65,7 @@ class ServiceDueAnalysisSkill extends BaseSkill {
     const target = dateTo || dateFrom;
 
     let soql =
-      `SELECT Id, Name, UCO_Collection__c, ${serviceDue.ACCOUNT_DUE_FIELDS}, ` +
-      `${serviceDue.SERVICE_HISTORY_SUBQUERY} FROM Account `;
+      `SELECT Id, Name, UCO_Collection__c, ${serviceDue.ACCOUNT_DUE_FIELDS} FROM Account `;
 
     if (Array.isArray(accountIds) && accountIds.length > 0) {
       const ids = [...new Set(accountIds.slice(0, MAX_ACCOUNT_IDS).map(safeId))]
@@ -79,7 +79,7 @@ class ServiceDueAnalysisSkill extends BaseSkill {
       soql += `ORDER BY UCOLastServiceDate__c ASC NULLS FIRST LIMIT ${CANDIDATE_LIMIT}`;
     }
 
-    const accounts = await sf.query(soql);
+    const accounts = await withServiceHistoryForAccounts(await sf.query(soql));
 
     const dueAccounts = [];
     const skippedByReason = {};
