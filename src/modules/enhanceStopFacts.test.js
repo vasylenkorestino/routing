@@ -14,6 +14,7 @@ const {
   looksCrypticReason,
   buildEnhanceStopRow,
   indexStopFactsByAccountId,
+  shouldForceNotDue,
   applyServiceHistoryReasonOverride,
 } = require('./enhanceStopFacts');
 
@@ -249,6 +250,104 @@ test('not-due history allows remove with plain English (not no-history)', () => 
   assert.equal(out[0].action, 'remove');
   assert.match(out[0].reason, /^Last UCO:/);
   assert.match(out[0].reason, /Remove — not due yet/);
+});
+
+/**
+ * Builds stop facts for an account serviced 5 days before the route date on an
+ * 8-week cadence, i.e. not due. Overrides let a case add VIP / fixed / fewer
+ * services without repeating the setup.
+ */
+function notDueStopFacts({ account = {}, stop = {}, routeDate = '2026-07-25' } = {}) {
+  const acctId = '001NOTDUE000000';
+  const row = buildEnhanceStopRow(
+    { Id: 'a0RND', AccountId__c: acctId, Account_Name__c: 'Fresh', ...stop },
+    {
+      Id: acctId,
+      Estimated_Pickup_Frequency__c: '8 Weeks',
+      Services__r: services(['2026-07-20', 50], ['2026-05-20', 45], ['2026-03-20', 40]),
+      ...account,
+    },
+    routeDate,
+  );
+  const { _remain, ...publicRow } = row;
+  return { row, acctId, factsById: indexStopFactsByAccountId([publicRow]) };
+}
+
+/** Runs one AI stop recommendation through the override for a not-due account. */
+function overrideNotDue(rec, setup = {}) {
+  const { acctId, factsById, row } = notDueStopFacts(setup);
+  const out = applyServiceHistoryReasonOverride(
+    [{ accountId: acctId, confidence: 75, ...rec }],
+    factsById,
+  );
+  return { result: out[0], row };
+}
+
+test('not-due KEEP is downgraded to remove and loses the soft rationale', () => {
+  const { result, row } = overrideNotDue({
+    action: 'keep',
+    reason: 'Last UCO: Jul 20, 2026 (50 gal). Next due ~Sep 14. Keep — not yet due, high single-visit volume warrants retention.',
+  });
+
+  assert.equal(row.due, false);
+  assert.equal(result.action, 'remove');
+  assert.equal(result._notDueOverride, true);
+  assert.match(result.reason, /^Last UCO: Jul 20, 2026 \(50 gal\)\./);
+  assert.match(result.reason, /Remove — not due yet\.$/);
+  assert.doesNotMatch(result.reason, /warrants retention/i);
+  assert.ok(result.confidence >= 90);
+});
+
+test('not-due OVERFLOW is downgraded to remove', () => {
+  const { result } = overrideNotDue({ action: 'overflow', reason: 'Keep for load balance.' });
+  assert.equal(result.action, 'remove');
+  assert.equal(result._notDueOverride, true);
+});
+
+test('not-due KEEP survives when the account must remain on route', () => {
+  // Two UCO services → new-account remain rule applies.
+  const { result } = overrideNotDue(
+    { action: 'keep', reason: 'Newer account building a pickup pattern.' },
+    { account: { Services__r: services(['2026-07-20', 50], ['2026-05-20', 45]) } },
+  );
+  assert.equal(result.action, 'keep');
+  assert.equal(result._notDueOverride, undefined);
+});
+
+test('not-due KEEP survives for fixed points and VIP accounts', () => {
+  const fixed = overrideNotDue(
+    { action: 'keep', reason: 'Fixed stop on every run.' },
+    { stop: { Fixed_point__c: true } },
+  );
+  assert.equal(fixed.result.action, 'keep');
+
+  const vip = overrideNotDue(
+    { action: 'keep', reason: 'No-fail customer.' },
+    { account: { Priority_Tier__c: 'VIP-No-fail' } },
+  );
+  assert.equal(vip.result.action, 'keep');
+});
+
+test('due stop is untouched by the not-due guard', () => {
+  const { result, row } = overrideNotDue(
+    { action: 'keep', reason: 'Last UCO: Jul 20, 2026 (50 gal). Next due ~Sep 14. Keep — overdue.' },
+    { routeDate: '2026-09-30' },
+  );
+  assert.equal(row.due, true);
+  assert.equal(result.action, 'keep');
+  assert.equal(result._notDueOverride, undefined);
+});
+
+test('on-call account with no next due date is never auto-removed', () => {
+  const { result } = overrideNotDue(
+    { action: 'keep', reason: 'Last UCO: Jul 20, 2026 (50 gal). Keep — on-call pickup schedule.' },
+    { account: { Estimated_Pickup_Frequency__c: 'On-Call' } },
+  );
+  assert.equal(result.action, 'keep');
+  assert.equal(
+    shouldForceNotDue({ hasUcoHistory: true, nextDueDate: null, due: false }),
+    false,
+  );
 });
 
 test('missing account row reports history unavailable, never "no pickups"', () => {

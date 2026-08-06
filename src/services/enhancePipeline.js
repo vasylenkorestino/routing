@@ -35,6 +35,7 @@ HARD RULES:
 - mustRemainOnRoute = true → always keep (new account: <3 UCO services, or CDL delivery >14 days ago with no UCO yet).
 - Overdue means daysOverdue / days past nextDueDate from the service-due engine. NEVER treat gpdHistorySpanDays (DaysInterval__c) as overdue or cadence — it is only the GPD history window span.
 - Prefer KEEP when due === true or mustRemainOnRoute. FLAG only for soft operational concerns (access, notes), not invented missing history.
+- When due === false and mustRemainOnRoute/VIP/fixed are all false, do NOT keep — return REMOVE. "Not due yet" is never a KEEP justification, no matter how good the volume or account history looks.
 - Never claim missing last UCO when hasUcoHistory is true or reasonFacts.lastUcoDate is set.
 - lastGallons / reasonFacts.lastUcoGallons of 0 means last pickup volume was zero — NOT missing history.
 - NEVER dump camelCase field names (lastServiceDate, ucoServiceCount, nextDueDate, etc.) in reason text.
@@ -299,10 +300,14 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   setStep(jobId, 'analyze_stops', 'done');
   const flagged = existingStops.filter((s) => s.action === 'remove' || s.action === 'flag').length;
   const remainForced = existingStops.filter((s) => s._remainOverride).length;
+  const notDueForced = existingStops.filter((s) => s._notDueOverride).length;
   const historyRewrites = existingStops.filter((s) => s._historyReasonOverride).length;
   aiJobs.addFinding(jobId, `Reviewed ${existingStops.length} stops — ${flagged} flagged for review`);
   if (remainForced) {
     aiJobs.addFinding(jobId, `Forced KEEP on ${remainForced} new-account/CDL stops`);
+  }
+  if (notDueForced) {
+    aiJobs.addFinding(jobId, `Downgraded ${notDueForced} not-due stops from keep to remove`);
   }
   if (historyRewrites) {
     aiJobs.addFinding(jobId, `Normalized ${historyRewrites} stop reasons from UCO service history`);

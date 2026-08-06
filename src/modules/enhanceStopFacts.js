@@ -257,8 +257,26 @@ function lookupStopFacts(factsByAccountId, accountId) {
 }
 
 /**
- * Post-AI safety net: force KEEP when history + due/remain/VIP/fixed,
- * and rewrite cryptic / false “no history” reasons into plain English.
+ * True when engine facts leave no justification for keeping the stop:
+ * serviced history exists, a next due date was computed and it is still ahead,
+ * and no remain/fixed/VIP rule applies. A missing nextDueDate means the engine
+ * could not resolve a cadence (no_frequency) — a data gap, not a "not due".
+ */
+function shouldForceNotDue(facts) {
+  if (!facts) return false;
+  return !!facts.hasUcoHistory
+    && !!facts.nextDueDate
+    && !facts.due
+    && !(Number(facts.daysOverdue) > 0)
+    && !facts.mustRemainOnRoute
+    && !facts.isFixed
+    && !facts.isVip;
+}
+
+/**
+ * Post-AI safety net: force KEEP when history + due/remain/VIP/fixed, force
+ * REMOVE when nothing justifies keeping a not-due stop, and rewrite cryptic /
+ * false “no history” reasons into plain English.
  */
 function applyServiceHistoryReasonOverride(existingStops = [], factsByAccountId = {}) {
   return existingStops.map((rec) => {
@@ -294,6 +312,19 @@ function applyServiceHistoryReasonOverride(existingStops = [], factsByAccountId 
     let action = String(rec.action || 'flag').toLowerCase();
     if (forceKeep && action !== 'keep' && action !== 'overflow') {
       action = 'keep';
+    }
+
+    // "Not due yet" is never a reason to keep a stop. Rebuild the reason from
+    // engine facts so the model's soft rationale cannot trail a Remove verb.
+    if (!forceKeep && (action === 'keep' || action === 'overflow') && shouldForceNotDue(facts)) {
+      return {
+        ...rec,
+        action: 'remove',
+        confidence: Math.max(Number(rec.confidence) || 0, 90),
+        reason: formatManagerReason(facts, 'remove', deriveWhy(facts, 'remove')),
+        _notDueOverride: true,
+        _historyReasonOverride: true,
+      };
     }
 
     const cryptic = looksCrypticReason(rec.reason);
@@ -369,5 +400,6 @@ module.exports = {
   deriveWhy,
   buildEnhanceStopRow,
   indexStopFactsByAccountId,
+  shouldForceNotDue,
   applyServiceHistoryReasonOverride,
 };
