@@ -6,6 +6,7 @@ const assert = require('assert');
 const {
   loadServiceHistoryByAccountId,
   attachServiceHistory,
+  historySinceISO,
 } = require('./serviceHistoryLoader');
 const { extractServiceHistory } = require('./serviceDue');
 
@@ -64,7 +65,7 @@ test('groups rows by 15-char account Id, newest first', async () => {
   assert.equal(map.get('001BBBBBBBBBBBB')[0].Qty_Gallons__c, 60);
 });
 
-test('queries Service__c directly with Code__c and date filters', async () => {
+test('queries Service__c directly with Code__c and a computed date boundary', async () => {
   const conn = stubConn([{ done: true, records: [] }]);
   await loadServiceHistoryByAccountId(conn, ['001AAAAAAAAAAAAAAA']);
 
@@ -73,9 +74,53 @@ test('queries Service__c directly with Code__c and date filters', async () => {
   assert.match(soql, /Account__c IN \('001AAAAAAAAAAAAAAA'\)/);
   assert.match(soql, /Code__c = 'UCO'/);
   assert.match(soql, /Code__c = 'CDL'/);
+  assert.match(soql, /Code__c = 'UCO-INC'/, 'inaccessible visits are loaded');
+  assert.match(soql, /isInaccessible__c/);
   assert.match(soql, /Service_Date__c != null/);
-  assert.match(soql, /LAST_N_MONTHS:36/);
+  assert.match(soql, new RegExp(`Service_Date__c >= ${historySinceISO()}`));
+  assert.doesNotMatch(soql, /LAST_N_MONTHS/, 'the literal hides the current month');
   assert.doesNotMatch(soql, /Services__r/);
+});
+
+test('history boundary rolls daily, so the current month is never cut off', () => {
+  assert.equal(historySinceISO(36, new Date('2026-08-01T12:00:00Z')), '2023-08-01');
+  assert.equal(historySinceISO(36, new Date('2026-08-31T12:00:00Z')), '2023-08-31');
+  // A service dated today is inside the window on any day of the month.
+  assert.ok('2026-08-02' >= historySinceISO(36, new Date('2026-08-02T12:00:00Z')));
+});
+
+test('re-queries sparse accounts without a date bound', async () => {
+  const conn = stubConn([
+    { done: true, records: [row('001AAAAAAAAAAAAAAA', '2026-06-11', 35)] },
+    {
+      done: true,
+      records: [
+        row('001AAAAAAAAAAAAAAA', '2026-06-11', 35),
+        row('001AAAAAAAAAAAAAAA', '2021-02-10', 30),
+        row('001AAAAAAAAAAAAAAA', '2020-02-10', 25),
+      ],
+    },
+  ]);
+  const map = await loadServiceHistoryByAccountId(conn, ['001AAAAAAAAAAAAAAA']);
+
+  assert.equal(conn.queries.length, 2);
+  assert.match(conn.queries[0], /Service_Date__c >= \d{4}-\d{2}-\d{2}/);
+  assert.doesNotMatch(conn.queries[1], /Service_Date__c >=/);
+  assert.equal(map.get('001AAAAAAAAAAAA').length, 3, 'older history replaces the truncated pass');
+});
+
+test('skips the top-up query when the window returns enough history', async () => {
+  const conn = stubConn([{
+    done: true,
+    records: [
+      row('001AAAAAAAAAAAAAAA', '2026-06-11', 35),
+      row('001AAAAAAAAAAAAAAA', '2026-05-14', 30),
+      row('001AAAAAAAAAAAAAAA', '2026-04-16', 32),
+      row('001AAAAAAAAAAAAAAA', '2026-03-19', 28),
+    ],
+  }]);
+  await loadServiceHistoryByAccountId(conn, ['001AAAAAAAAAAAAAAA']);
+  assert.equal(conn.queries.length, 1);
 });
 
 test('caps history at 20 rows per account', async () => {
@@ -102,18 +147,14 @@ test('follows nextRecordsUrl and merges every batch', async () => {
   ]);
 
   assert.equal(map.size, 3, 'every batch is merged');
-  assert.deepEqual(conn.queries.slice(1), ['queryMore:/next/1', 'queryMore:/next/2']);
+  assert.deepEqual(conn.queries.slice(1, 3), ['queryMore:/next/1', 'queryMore:/next/2']);
 });
 
 test('chunks more than 200 account Ids into multiple queries', async () => {
   const ids = Array.from({ length: 450 }, (_, i) => `001${String(i).padStart(15, '0')}`);
-  const conn = stubConn([
-    { done: true, records: [] },
-    { done: true, records: [] },
-    { done: true, records: [] },
-  ]);
+  const conn = stubConn([]);
   await loadServiceHistoryByAccountId(conn, ids);
-  assert.equal(conn.queries.length, 3);
+  assert.equal(conn.queries.length, 6, '3 chunks, each followed by a top-up pass');
 });
 
 test('deduplicates account Ids before querying', async () => {

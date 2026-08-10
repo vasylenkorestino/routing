@@ -98,6 +98,15 @@ function parseFrequencyDays(account) {
   return null;
 }
 
+/**
+ * True when the driver could not reach the tank. Code__c is the formula
+ * IF(isInaccessible__c, 'UCO-INC', ServiceCode__c), so an inaccessible visit of
+ * any record type reports UCO-INC.
+ */
+function isInaccessibleService(service) {
+  return service?.isInaccessible__c === true || service?.Code__c === 'UCO-INC';
+}
+
 /** True when a Service__c row is a UCO Collection (excludes CDL / Deliver Container). */
 function isUcoCollectionService(service) {
   const code = service?.Code__c || '';
@@ -105,7 +114,12 @@ function isUcoCollectionService(service) {
   if (code === 'CDL') return false;
   const name = service?.RecordType?.Name || service?.RecordTypeName__c || '';
   const dev = service?.RecordType?.DeveloperName || service?.RecordTypeDeveloperName__c || '';
+  // UCO-INC masks the real code, so record type is the only classifier left.
+  if (dev === 'Tank_Delivered' || name === 'Deliver Container') return false;
   if (dev === 'WVO_Collection' || name === 'UCO Collection') return true;
+  // Unclassifiable inaccessible rows count as UCO visits; they are excluded from
+  // due and fill-rate math anyway, so keeping them cannot inflate a due date.
+  if (isInaccessibleService(service)) return true;
   // Legacy SOQL without Code/RecordType defaults to UCO-only history.
   if (!code && !name && !dev) return true;
   return false;
@@ -113,7 +127,7 @@ function isUcoCollectionService(service) {
 
 /**
  * Normalizes attached service history (jsforce { records } wrapper or a plain
- * array) into UCO Collection rows [{ date, gallons }], newest first.
+ * array) into UCO Collection rows [{ date, gallons, inaccessible }], newest first.
  * Deliver Container (CDL) rows are excluded from due/fill-rate math.
  * History is attached by serviceHistoryLoader.attachServiceHistory.
  */
@@ -126,8 +140,18 @@ function extractServiceHistory(account) {
       gallons: Number.isFinite(Number(s.Qty_Gallons__c)) && s.Qty_Gallons__c != null
         ? Number(s.Qty_Gallons__c)
         : null,
+      inaccessible: isInaccessibleService(s),
     }))
     .sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+/**
+ * Visits where the driver actually reached the tank, newest first. An
+ * inaccessible visit removed no oil, so it neither resets the accumulation
+ * clock nor contributes to cadence or fill-rate math.
+ */
+function tankReachingServices(services = []) {
+  return services.filter((s) => !s.inaccessible);
 }
 
 /**
@@ -137,7 +161,7 @@ function extractServiceHistory(account) {
  * Returns { days, label, sampleSize } or null.
  */
 function estimateFrequencyFromHistory(services) {
-  const dates = [...new Set((services || []).map((s) => s.date))].sort().reverse();
+  const dates = [...new Set(tankReachingServices(services).map((s) => s.date))].sort().reverse();
   if (dates.length < 2) return null;
   const intervals = [];
   for (let i = 0; i < dates.length - 1; i += 1) {
@@ -167,35 +191,46 @@ function parseTankCapacity(account) {
 }
 
 /**
- * Fill rate in gallons/day from Gross Gallons history: average positive
- * Qty_Gallons__c per service divided by the median interval between services.
- * Needs >= 2 dated services and >= 1 positive gallons reading. Returns number or null.
+ * Fill rate in gallons/day: everything collected across the span between the
+ * oldest and newest tank-reaching visit, divided by that span.
+ *
+ * Measuring over elapsed days rather than averaging successful pickups keeps
+ * zero-gallon visits honest — a run of empty tanks lowers the rate instead of
+ * shortening the interval and inflating it. Gallons from the oldest visit are
+ * excluded because they accrued before the measured span.
+ *
+ * Needs >= 2 dated tank-reaching visits and >= 1 positive reading after the
+ * oldest. Returns number or null.
  */
 function estimateFillRate(services) {
-  const dates = [...new Set((services || []).map((s) => s.date))].sort().reverse();
+  const reached = tankReachingServices(services);
+  const dates = [...new Set(reached.map((s) => s.date))].sort().reverse();
   if (dates.length < 2) return null;
-  const intervals = [];
-  for (let i = 0; i < dates.length - 1; i += 1) {
-    const gap = daysBetween(dates[i + 1], dates[i]);
-    if (gap > 0) intervals.push(gap);
-  }
-  const medInterval = median(intervals);
-  if (!medInterval) return null;
-  const gallons = (services || []).map((s) => s.gallons).filter((g) => Number.isFinite(g) && g > 0);
-  if (!gallons.length) return null;
-  const avgGallons = gallons.reduce((s, g) => s + g, 0) / gallons.length;
-  const rate = avgGallons / medInterval;
-  return rate > 0 ? round2(rate) : null;
+
+  const oldest = dates[dates.length - 1];
+  const span = daysBetween(oldest, dates[0]);
+  if (!(span > 0)) return null;
+
+  const gallons = reached
+    .filter((s) => s.date !== oldest && Number.isFinite(s.gallons) && s.gallons > 0)
+    .reduce((sum, s) => sum + s.gallons, 0);
+  if (!(gallons > 0)) return null;
+
+  return round2(gallons / span);
 }
 
 /**
- * Last UCO service date: newest UCO Collection Service__c only.
+ * Last UCO service date: newest UCO Collection where the driver reached the tank.
  * UCOLastServiceDate__c is ignored (can be stale). Empty history → null.
+ * When every recorded visit was inaccessible the tank has never been verified
+ * empty, so the oldest visit is used — oil has been accruing at least that long.
  * Returns { date, source } or null.
  */
 function resolveLastServiceDate(account, services = extractServiceHistory(account)) {
-  const historyDate = services.length > 0 ? services[0].date : null;
-  if (historyDate) return { date: historyDate, source: 'service_history' };
+  const reached = tankReachingServices(services)[0];
+  if (reached) return { date: reached.date, source: 'service_history' };
+  const oldest = services.length > 0 ? services[services.length - 1] : null;
+  if (oldest) return { date: oldest.date, source: 'oldest_inaccessible_visit' };
   return null;
 }
 
@@ -327,7 +362,9 @@ module.exports = {
   parseFrequencyDays,
   isOnCall,
   isUcoCollectionService,
+  isInaccessibleService,
   extractServiceHistory,
+  tankReachingServices,
   estimateFrequencyFromHistory,
   parseTankCapacity,
   estimateFillRate,

@@ -32,6 +32,31 @@ function services(...rows) {
   };
 }
 
+test('inaccessible visits do not count toward the first three services', () => {
+  const inaccessible = (date) => ({
+    Service_Date__c: date,
+    Qty_Gallons__c: 0,
+    Code__c: 'UCO-INC',
+    isInaccessible__c: true,
+    RecordType: { Name: 'UCO Collection' },
+  });
+
+  const res = evaluateMustRemainOnRoute(
+    {
+      Services__r: {
+        records: [
+          inaccessible('2026-07-18'),
+          inaccessible('2026-07-11'),
+          ...services(['2026-07-04', 40], ['2026-06-06', 35]).records,
+        ],
+      },
+    },
+    '2026-07-20',
+  );
+  assert.equal(res.ucoServiceCount, 2, 'failed access attempts are not collections');
+  assert.equal(res.mustRemainOnRoute, true);
+});
+
 test('CDL older than 14 days with no UCO → must remain', () => {
   const res = evaluateMustRemainOnRoute(
     { Services__r: services(['2026-07-01', null, 'Deliver Container']) },

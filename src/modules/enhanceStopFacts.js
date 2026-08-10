@@ -6,6 +6,7 @@
 const {
   evaluateAccount,
   extractServiceHistory,
+  tankReachingServices,
   daysBetween,
 } = require('./serviceDue');
 const {
@@ -150,10 +151,12 @@ function buildEnhanceStopRow(stop, account, serviceDate) {
   // history was never read — that is not the same as "this account has none".
   const historyUnavailable = !acct.Id;
 
-  // Newest UCO gallons (including 0); else Route LastGallonsCollected__c.
+  // Newest gallons from the same visit the due engine measures from (including
+  // 0); else Route LastGallonsCollected__c.
+  const lastReached = tankReachingServices(history)[0];
   let lastGallons = stop?.LastGallonsCollected__c;
-  if (hasUcoHistory && history[0].gallons != null) {
-    lastGallons = history[0].gallons;
+  if (lastReached && lastReached.gallons != null) {
+    lastGallons = lastReached.gallons;
   }
 
   const daysOverdue = svc.due && svc.nextDueDate

@@ -147,12 +147,26 @@ test('Tank_Size__c parses to gallons; Jugs/empty fall back to other capacity fie
   assert.equal(parseTankCapacity({ Tank_Size__c: 'Jugs' }), null);
 });
 
-test('fill rate = avg gross gallons per service / median interval', () => {
+test('fill rate = gallons collected across the span between visits', () => {
   const hist = extractServiceHistory({
     Services__r: services(['2026-06-01', 60], ['2026-05-12', 40], ['2026-04-22', 50]),
   });
-  // avg 50 gal per service / 20-day median interval = 2.5 gal/day
+  // 100 gal collected after the Apr 22 emptying / 40-day span = 2.5 gal/day
   assert.equal(estimateFillRate(hist), 2.5);
+});
+
+test('empty pickups lower the fill rate instead of inflating it', () => {
+  // Doral: a big haul, two empty tanks, then a small haul.
+  const hist = extractServiceHistory({
+    Services__r: services(
+      ['2026-08-02', 20],
+      ['2026-07-27', 0],
+      ['2026-07-20', 0],
+      ['2026-07-16', 240],
+    ),
+  });
+  // 20 gal over the 17-day span, not 130 avg over a 6-day median interval.
+  assert.equal(estimateFillRate(hist), 1.18);
 });
 
 test('fill rate needs 2+ dates and at least one positive gallons reading', () => {
@@ -161,6 +175,105 @@ test('fill rate needs 2+ dates and at least one positive gallons reading', () =>
     estimateFillRate(extractServiceHistory({ Services__r: services(['2026-06-01', 0], ['2026-05-01', null]) })),
     null,
   );
+});
+
+/* ── inaccessible visits ──────────────────────────────────── */
+
+/** Marks a history row as a visit where the driver could not reach the tank. */
+const INACCESSIBLE = { Code__c: 'UCO-INC', isInaccessible__c: true };
+
+/** Builds history rows with per-row overrides (codes, record types, flags). */
+function serviceRows(...rows) {
+  return {
+    records: rows.map(([date, gallons, extra = {}]) => ({
+      Service_Date__c: date,
+      Qty_Gallons__c: gallons,
+      Code__c: 'UCO',
+      ...extra,
+    })),
+  };
+}
+
+test('UCO-INC is a UCO visit, unless record type says otherwise', () => {
+  assert.equal(isUcoCollectionService({ Code__c: 'UCO-INC', isInaccessible__c: true }), true);
+  assert.equal(
+    isUcoCollectionService({
+      Code__c: 'UCO-INC',
+      isInaccessible__c: true,
+      RecordType: { Name: 'UCO Collection', DeveloperName: 'WVO_Collection' },
+    }),
+    true,
+  );
+  // The Code__c formula masks CDL when the delivery could not be made.
+  assert.equal(
+    isUcoCollectionService({
+      Code__c: 'UCO-INC',
+      isInaccessible__c: true,
+      RecordType: { Name: 'Deliver Container', DeveloperName: 'Tank_Delivered' },
+    }),
+    false,
+  );
+});
+
+test('an inaccessible visit does not reset the accumulation clock', () => {
+  const account = {
+    Services__r: serviceRows(['2026-08-02', 0, INACCESSIBLE], ['2026-07-16', 240]),
+  };
+  assert.deepEqual(
+    resolveLastServiceDate(account),
+    { date: '2026-07-16', source: 'service_history' },
+  );
+});
+
+test('a genuinely empty pickup does reset the clock', () => {
+  const account = { Services__r: serviceRows(['2026-08-02', 0], ['2026-07-16', 240]) };
+  assert.deepEqual(
+    resolveLastServiceDate(account),
+    { date: '2026-08-02', source: 'service_history' },
+  );
+});
+
+test('inaccessible vs empty flips the due decision', () => {
+  const base = { Estimated_Pickup_Frequency__c: '4 Weeks' };
+  const blocked = evaluateAccount(
+    { ...base, Services__r: serviceRows(['2026-08-02', 0, INACCESSIBLE], ['2026-07-16', 240]) },
+    '2026-08-20',
+  );
+  const empty = evaluateAccount(
+    { ...base, Services__r: serviceRows(['2026-08-02', 0], ['2026-07-16', 240]) },
+    '2026-08-20',
+  );
+
+  assert.equal(blocked.nextDueDate, '2026-08-13');
+  assert.equal(blocked.due, true, 'oil kept accruing while we could not reach the tank');
+  assert.equal(empty.nextDueDate, '2026-08-30');
+  assert.equal(empty.due, false, 'the tank was verified empty, so service moves out');
+});
+
+test('never-reached accounts accrue from their oldest visit', () => {
+  const account = {
+    Services__r: serviceRows(
+      ['2026-08-02', 0, INACCESSIBLE],
+      ['2026-07-16', 0, INACCESSIBLE],
+    ),
+  };
+  assert.deepEqual(
+    resolveLastServiceDate(account),
+    { date: '2026-07-16', source: 'oldest_inaccessible_visit' },
+  );
+});
+
+test('inaccessible visits are excluded from cadence and fill rate', () => {
+  const hist = extractServiceHistory({
+    Services__r: serviceRows(
+      ['2026-06-01', 60],
+      ['2026-05-20', 0, INACCESSIBLE],
+      ['2026-05-12', 40],
+      ['2026-04-22', 50],
+    ),
+  });
+  assert.equal(estimateFillRate(hist), 2.5, 'same as without the failed visit');
+  assert.equal(estimateFrequencyFromHistory(hist).days, 21);
 });
 
 /* ── last service date resolution ─────────────────────────── */

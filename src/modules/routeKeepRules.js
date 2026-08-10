@@ -9,7 +9,7 @@
  * Mature accounts (3+ UCO) use normal service-due logic.
  */
 
-const { daysBetween, isUcoCollectionService } = require('./serviceDue');
+const { daysBetween, isUcoCollectionService, isInaccessibleService } = require('./serviceDue');
 
 const CDL_REMAIN_AFTER_DAYS = 14;
 const NEW_ACCOUNT_UCO_SERVICE_CAP = 3;
@@ -28,9 +28,15 @@ function rawServices(account) {
   return account?.Services__r?.records || account?.Services__r || [];
 }
 
-/** Counts dated UCO Collection services (CDL excluded). */
+/**
+ * Counts dated UCO Collection services (CDL excluded). A visit where the driver
+ * could not reach the tank is not a collection, so it must not consume one of
+ * the first three services.
+ */
 function countUcoServices(account) {
-  return rawServices(account).filter((s) => s?.Service_Date__c && isUcoCollectionService(s)).length;
+  return rawServices(account).filter(
+    (s) => s?.Service_Date__c && isUcoCollectionService(s) && !isInaccessibleService(s),
+  ).length;
 }
 
 /** Newest Deliver Container (CDL) service date as YYYY-MM-DD, or null. */
