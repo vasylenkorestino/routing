@@ -347,6 +347,24 @@ test('date-range window: due when nextDueDate falls within [dateFrom, dateTo]', 
   assert.equal(evaluateAccount(acct, '2026-07-06', '2026-07-08').due, false);
 });
 
+test('daysUntilDue counts forward to the due date and goes negative when overdue', () => {
+  const acct = {
+    Estimated_Pickup_Frequency__c: '2 Weeks',
+    Services__r: services(['2026-07-31', 80]),
+  }; // due 08-14
+
+  const early = evaluateAccount(acct, '2026-08-11');
+  assert.equal(early.nextDueDate, '2026-08-14');
+  assert.equal(early.daysUntilDue, 3);
+  assert.equal(early.due, false);
+
+  assert.equal(evaluateAccount(acct, '2026-08-14').daysUntilDue, 0);
+  assert.equal(evaluateAccount(acct, '2026-08-24').daysUntilDue, -10);
+
+  // No cadence to work from means no due date and no countdown.
+  assert.equal(evaluateAccount({ Estimated_Pickup_Frequency__c: 'On-Call' }, '2026-08-11').daysUntilDue, null);
+});
+
 test('uses Service__c history for last service date', () => {
   const res = evaluateAccount(
     { Estimated_Pickup_Frequency__c: '2 Weeks', Services__r: services(['2026-06-20', 45], ['2026-06-01', 40]) },

@@ -10,6 +10,9 @@ const { loadEnhanceAddCandidates } = require('./enhanceAddCandidates');
 const { buildMemoryContext } = require('../agent/memory/recall');
 const { ACCOUNT_DUE_FIELDS } = require('../modules/serviceDue');
 const { withServiceHistory } = require('../modules/serviceHistoryLoader');
+const { resolveNextVisit } = require('../modules/routeCadence');
+const { selectWithinCapacity } = require('../modules/routeCapacity');
+const { loadAccountFeedback, lookupFeedback } = require('./managerFeedback');
 const {
   applyMustRemainKeepOverride,
 } = require('../modules/routeKeepRules');
@@ -28,20 +31,32 @@ const TRUCK_CAPACITY_GAL = 1800;
 
 const ANALYZE_STOPS_SYSTEM = `You are an AI route analyst for a UCO collection company. Analyze EXISTING stops only.
 
-Use tank fill %, VIP/fixed points, driver notes, mustRemainOnRoute, reasonFacts, and truck capacity (~1800 gal).
+Use tank fill %, VIP/fixed points, driver notes, mustRemainOnRoute, reasonFacts, manager comments and truck capacity (~1800 gal).
+
+THE NEXT VISIT RULE (most important):
+routeContext.nextVisitDate is when this route realistically runs again, measured from its completed run history. There is no trip in between — nobody creates a separate route for one account. So an account whose due date falls on or before nextVisitDate MUST be serviced on this run, even though it is not due on the route date itself.
+Each stop carries dueTier, already computed for you:
+- "overdue" → KEEP.
+- "due_today" → KEEP.
+- "due_before_next_visit" → KEEP. Comes due before the truck returns; removing it guarantees it goes overdue.
+- "not_due" → REMOVE unless protected below. Its due date lands after nextVisitDate, so the next run catches it in time. Good volume or long history is NOT a reason to keep it.
+- "unknown" → FLAG for review.
 
 HARD RULES:
 - VIP/No-fail and fixed points = always keep.
 - mustRemainOnRoute = true → always keep (new account: <3 UCO services, or CDL delivery >14 days ago with no UCO yet).
+- managerKeepSignal = true means a manager already declined removing this stop → keep it.
+- managerComments are instructions from the dispatcher on this account. Honor them and reflect the intent in your reason.
 - Overdue means daysOverdue / days past nextDueDate from the service-due engine. NEVER treat gpdHistorySpanDays (DaysInterval__c) as overdue or cadence — it is only the GPD history window span.
-- Prefer KEEP when due === true or mustRemainOnRoute. FLAG only for soft operational concerns (access, notes), not invented missing history.
-- When due === false and mustRemainOnRoute/VIP/fixed are all false, do NOT keep — return REMOVE. "Not due yet" is never a KEEP justification, no matter how good the volume or account history looks.
+- FLAG only for soft operational concerns (access, notes), not invented missing history.
 - Never claim missing last UCO when hasUcoHistory is true or reasonFacts.lastUcoDate is set.
 - lastGallons / reasonFacts.lastUcoGallons of 0 means last pickup volume was zero — NOT missing history.
 - NEVER dump camelCase field names (lastServiceDate, ucoServiceCount, nextDueDate, etc.) in reason text.
 
 REASON FORMAT (required, 1–2 short sentences, plain English for managers):
-- With history: "Last UCO: Jun 8, 2026 (0 gal). Next due ~Jul 6. Keep — overdue."
+- Overdue: "Last UCO: Jun 8, 2026 (0 gal). Next due ~Jul 6. Keep — overdue."
+- Due before the next run: "Last UCO: Jul 31, 2026 (80 gal). Due Aug 14 — before this route's next run (~Aug 25). Keep — comes due before this route returns."
+- Not due: "Last UCO: Aug 3, 2026 (60 gal). Next due ~Sep 14. Remove — not due yet."
 - No history: "No UCO pickups on record. Flag — verify before committing to route."
 Use reasonFacts for dates/gallons. Action verb must match your action (Keep|Remove|Flag).
 
@@ -95,18 +110,6 @@ function setStep(jobId, id, status, detail) {
   publishJobProgress(jobId);
 }
 
-/** Estimates gallons committed by stops marked keep/overflow. */
-function estimateKeptGallons(existingStops, stopsData) {
-  let total = 0;
-  for (const rec of existingStops) {
-    if (rec.action === 'remove') continue;
-    const stop = stopsData.find((s) => s.accountId === rec.accountId);
-    const gal = stop?.lastGallons || 0;
-    total += Math.max(0, Number(gal) || 0);
-  }
-  return total;
-}
-
 /**
  * Runs the full AI Enhance pipeline with live progress on jobId.
  * @returns {Promise<object>} response payload for UI
@@ -123,9 +126,11 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   const conn = await getConnection();
 
   setStep(jobId, 'load_route', 'running');
+  // Shape__r.Interval__c is the cadence fallback for routes with no completed
+  // runs yet; Google_Route__c.Interval__c is unpopulated org-wide.
   const routeQuery = `
     SELECT Id, Name, Service_Date__c, DriverName__c, Total_Distance__c, Total_Time__c,
-           Service_Location_Start__c, Service_Location_End__c, Shape__c
+           Service_Location_Start__c, Service_Location_End__c, Shape__c, Shape__r.Interval__c
     FROM Google_Route__c WHERE Id = '${googleRouteId}'
   `;
   const stopsQuery = `
@@ -154,7 +159,12 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   publishJobProgress(jobId);
   let historicalInsights = null;
   try {
-    historicalInsights = await analyzeRouteCompare({ googleRouteId, routeName: gRoute.Name, limit: 15 });
+    historicalInsights = await analyzeRouteCompare({
+      googleRouteId,
+      routeName: gRoute.Name,
+      limit: 15,
+      includeRunHistory: true,
+    });
     const histCount = historicalInsights?.historicalRoutes?.length ?? 0;
     setStep(jobId, 'compare_history', 'done', `${histCount} historical routes`);
     aiJobs.addFinding(jobId, `Compared with ${histCount} completed historical runs`);
@@ -175,6 +185,7 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   let nearbyAccounts = [];
   let nearbyResultRaw = {};
   let addCandidateStats = null;
+  let feedbackByAccountId = {};
 
   const loadAccounts = async () => {
     if (!accountIds.length) return;
@@ -211,12 +222,31 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     }
   };
 
-  await Promise.all([loadAccounts(), loadNearby()]);
+  const loadFeedback = async () => {
+    try {
+      feedbackByAccountId = await recorder.wrap(
+        'Load Manager Feedback',
+        'SOQL',
+        () => loadAccountFeedback(conn, accountIds),
+        { input: { accounts: accountIds.length } },
+      );
+    } catch (err) {
+      logger.warn('Enhance pipeline: manager feedback load failed', { error: err.message });
+    }
+  };
+
+  await Promise.all([loadAccounts(), loadNearby(), loadFeedback()]);
 
   const acctMap = indexAccountsById(accounts);
 
   const serviceDate = String(gRoute.Service_Date__c || '').slice(0, 10)
     || new Date().toISOString().slice(0, 10);
+
+  // When this route realistically runs again — the horizon that decides whether
+  // "not due on the route date" still has to be serviced today.
+  const runHistory = historicalInsights?._runHistory || [];
+  const shapeInterval = gRoute.Shape__r?.Interval__c || null;
+  const routeVisit = resolveNextVisit({ serviceDate, runs: runHistory, shapeInterval });
 
   const remainByAccountId = {};
   const unjoinedAccountIds = [];
@@ -225,7 +255,18 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     const accountId = resolveStopAccountId(s);
     const acct = lookupAccount(acctMap, accountId) || {};
     if (!acct.Id) unjoinedAccountIds.push(accountId || s.Id);
-    const row = buildEnhanceStopRow(s, acct, serviceDate);
+    // An account served on alternate passes waits longer than the route cadence,
+    // so the horizon is measured per account where its history supports it.
+    const visit = resolveNextVisit({
+      serviceDate,
+      accountId,
+      runs: runHistory,
+      shapeInterval,
+    });
+    const row = buildEnhanceStopRow(s, acct, serviceDate, {
+      ...visit,
+      feedback: lookupFeedback(feedbackByAccountId, accountId),
+    });
     if (acct.Id && !row.hasUcoHistory) noHistoryAccountIds.push(accountId);
     if (accountId && row._remain) {
       remainByAccountId[accountId] = row._remain;
@@ -273,7 +314,22 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   publishJobProgress(jobId);
 
   const routeHeader = { id: gRoute.Id, name: gRoute.Name, date: gRoute.Service_Date__c, driver: gRoute.DriverName__c };
+  const routeContext = {
+    serviceDate,
+    nextVisitDate: routeVisit.nextVisitDate,
+    cadenceDays: routeVisit.cadenceDays,
+    cadenceSource: routeVisit.cadenceSource,
+    historicalAvgStopCount: historicalInsights?.insights?.trends?.avgStopCount ?? null,
+    truckCapacityGal: TRUCK_CAPACITY_GAL,
+  };
+  // _runHistory is cadence input, not model input.
+  const { _runHistory, ...publicInsights } = historicalInsights || {};
   const client = new Anthropic({ apiKey: config.apiKey });
+
+  aiJobs.addFinding(
+    jobId,
+    `This route runs about every ${routeVisit.cadenceDays} days — next run ~${routeVisit.nextVisitDate}`,
+  );
 
   setStep(jobId, 'analyze_stops', 'running');
   const stopsResponse = await recorder.wrap(
@@ -283,9 +339,17 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
       model: config.model,
       max_tokens: config.maxTokens,
       system: ANALYZE_STOPS_SYSTEM,
-      messages: [{ role: 'user', content: JSON.stringify({ route: routeHeader, stops: stopsData, historicalInsights }) }],
+      messages: [{
+        role: 'user',
+        content: JSON.stringify({
+          route: routeHeader,
+          routeContext,
+          stops: stopsData,
+          historicalInsights: publicInsights,
+        }),
+      }],
     }),
-    { prompt: ANALYZE_STOPS_SYSTEM, input: { stops: stopsData.length } },
+    { prompt: ANALYZE_STOPS_SYSTEM, input: { stops: stopsData.length, routeContext } },
   );
 
   const stopsText = stopsResponse.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
@@ -294,7 +358,13 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
     stopsAnalysis.existingStops || [],
     remainByAccountId,
   );
-  const existingStops = applyServiceHistoryReasonOverride(afterRemain, stopFactsByAccountId);
+  const afterHistory = applyServiceHistoryReasonOverride(afterRemain, stopFactsByAccountId);
+  // Keeping every stop that comes due before the next run can outgrow the truck;
+  // trim by urgency last, so the cut is made on the final set of keeps.
+  const capacityResult = selectWithinCapacity(afterHistory, stopFactsByAccountId, {
+    capacityGal: TRUCK_CAPACITY_GAL,
+  });
+  const existingStops = capacityResult.stops;
   const summary = stopsAnalysis.summary || '';
 
   setStep(jobId, 'analyze_stops', 'done');
@@ -308,6 +378,13 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   }
   if (notDueForced) {
     aiJobs.addFinding(jobId, `Downgraded ${notDueForced} not-due stops from keep to remove`);
+  }
+  if (capacityResult.stats.deferred) {
+    aiJobs.addFinding(
+      jobId,
+      `Deferred ${capacityResult.stats.deferred} due stop(s) to ~${routeVisit.nextVisitDate} — `
+      + `truck full at ~${capacityResult.stats.keptGal} of ${TRUCK_CAPACITY_GAL} gal`,
+    );
   }
   if (historyRewrites) {
     aiJobs.addFinding(jobId, `Normalized ${historyRewrites} stop reasons from UCO service history`);
@@ -343,8 +420,8 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
   aiJobs.updateProgress(jobId, { step: 'find_adds', label: 'Finding add candidates…', percent: 65 });
   publishJobProgress(jobId);
 
-  const keptGal = estimateKeptGallons(existingStops, stopsData);
-  const remainingCapacityGal = Math.max(0, TRUCK_CAPACITY_GAL - keptGal);
+  // Projected gallons for the stops that survived the capacity pass.
+  const remainingCapacityGal = Math.max(0, TRUCK_CAPACITY_GAL - capacityResult.stats.keptGal);
 
   setStep(jobId, 'find_adds', 'running');
   let memoryBlock = '';
@@ -383,10 +460,11 @@ async function runEnhancePipeline(googleRouteId, jobId, userName) {
           role: 'user',
           content: `${JSON.stringify({
             route: routeHeader,
+            routeContext,
             stops: stopsData,
             nearbyAccounts,
             remainingCapacityGal,
-            historicalInsights,
+            historicalInsights: publicInsights,
             addCandidateStats,
           })}\n\nRespond with ONLY the JSON object described in the system prompt.`,
         }],

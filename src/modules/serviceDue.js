@@ -278,7 +278,7 @@ function estimateGallonsAtDate(account, targetDate, opts = {}) {
  * @param {string} dateFrom - YYYY-MM-DD start of the planning window.
  * @param {string} [dateTo] - YYYY-MM-DD end of the window (defaults to dateFrom).
  * @returns {{
- *   due: boolean, reason: string, nextDueDate: string|null,
+ *   due: boolean, reason: string, nextDueDate: string|null, daysUntilDue: number|null,
  *   lastServiceDate: string|null, lastDateSource: string|null,
  *   frequencyDays: number|null, frequencySource: string|null, frequencyLabel: string|null,
  *   effectiveFrequencyDays: number|null, capacityGallons: number|null,
@@ -297,6 +297,8 @@ function evaluateAccount(account, dateFrom, dateTo) {
     due: false,
     reason: '',
     nextDueDate: null,
+    // Days from the target date to the due date; negative once overdue.
+    daysUntilDue: null,
     lastServiceDate: last ? last.date : null,
     lastDateSource: last ? last.source : null,
     frequencyDays: null,
@@ -350,6 +352,7 @@ function evaluateAccount(account, dateFrom, dateTo) {
     ...base,
     due,
     nextDueDate,
+    daysUntilDue: daysBetween(target, nextDueDate),
     estimatedGallonsAtDate: estimateGallonsAtDate(account, target),
     reason: due ? `due_on_${nextDueDate}` : `not_due_until_${nextDueDate}`,
   };

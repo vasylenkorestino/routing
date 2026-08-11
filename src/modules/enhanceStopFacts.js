@@ -81,6 +81,9 @@ function actionVerb(action) {
 const HISTORY_UNAVAILABLE_REASON =
   'Service history unavailable. Flag — verify in Salesforce before routing.';
 
+/** Why clause for a due stop dropped only because the truck ran out of room. */
+const CAPACITY_DEFERRED_WHY = 'deferred for truck capacity';
+
 /** AI phrasings that claim there is no history — never valid when unverified. */
 const NO_HISTORY_CLAIM_RE = /no uco pickups|no service (date|history)/i;
 
@@ -100,14 +103,34 @@ function deriveWhy(facts, action) {
   if (a === 'keep' || a === 'overflow') {
     if (facts.daysOverdue > 0) return 'overdue';
     if (facts.due) return 'due for service';
+    if (facts.dueBeforeNextVisit) return 'comes due before this route returns';
+    if (facts.managerKeepSignal) return 'manager kept this stop previously';
     return 'keep on route';
   }
   if (a === 'remove') {
+    // A stop that is due before the truck comes back is only ever removed for
+    // capacity, never for timing — do not let it read as "not due yet".
+    if (facts.dueBeforeNextVisit) return CAPACITY_DEFERRED_WHY;
     if (facts.hasUcoHistory && facts.nextDueDate && !facts.due) return 'not due yet';
     return 'remove from route';
   }
   if (!facts.hasUcoHistory) return 'verify before committing to route';
   return 'needs manager review';
+}
+
+/**
+ * Due clause for the reason sentence. A stop that comes due before the route
+ * returns says so explicitly — "Next due ~Aug 17" alone reads like there is
+ * time to spare when the truck is not back until Aug 25.
+ */
+function formatDueClause(facts) {
+  const nextDate = formatShortDate(facts.nextDueDate);
+  if (!nextDate) return '';
+  const visitDate = formatShortDate(facts.nextVisitDate);
+  if (facts.dueBeforeNextVisit && visitDate) {
+    return ` Due ${nextDate} — before this route's next run (~${visitDate}).`;
+  }
+  return ` Next due ~${nextDate}.`;
 }
 
 /**
@@ -133,14 +156,33 @@ function formatManagerReason(facts, action, whyOverride) {
     ? `Last UCO: ${lastDate} (${galPart}).`
     : `Last UCO on record (${galPart}).`;
 
-  const nextDate = formatShortDate(facts.nextDueDate);
-  const nextPart = nextDate ? ` Next due ~${nextDate}.` : '';
-
-  return `${lastPart}${nextPart} ${verb} — ${why}.`.replace(/\s+/g, ' ').trim();
+  return `${lastPart}${formatDueClause(facts)} ${verb} — ${why}.`.replace(/\s+/g, ' ').trim();
 }
 
-/** Builds reasonFacts + enhance stop payload fields from Route + Account. */
-function buildEnhanceStopRow(stop, account, serviceDate) {
+/**
+ * Classifies a stop's urgency against the route's next visit.
+ * `not_due` is the only tier that justifies an automatic removal.
+ * @returns {'unknown'|'overdue'|'due_today'|'due_before_next_visit'|'not_due'}
+ */
+function resolveDueTier({ hasUcoHistory, nextDueDate, daysUntilDue, nextVisitDate }) {
+  if (!hasUcoHistory || !nextDueDate) return 'unknown';
+  if (daysUntilDue < 0) return 'overdue';
+  if (daysUntilDue === 0) return 'due_today';
+  if (nextVisitDate && nextDueDate <= nextVisitDate) return 'due_before_next_visit';
+  return 'not_due';
+}
+
+/**
+ * Builds reasonFacts + enhance stop payload fields from Route + Account.
+ *
+ * @param {object} stop - Route__c stop record
+ * @param {object} account - Account with Services__r
+ * @param {string} serviceDate - route date YYYY-MM-DD
+ * @param {{ nextVisitDate?: string, cadenceDays?: number, cadenceSource?: string,
+ *           feedback?: { comments: object[], keepSignal: boolean } }} [ctx]
+ *        route cadence horizon + manager feedback for this account
+ */
+function buildEnhanceStopRow(stop, account, serviceDate, ctx = {}) {
   const acct = account || {};
   const services = rawServiceRows(acct);
   const svc = evaluateAccount(acct, serviceDate);
@@ -166,19 +208,38 @@ function buildEnhanceStopRow(stop, account, serviceDate) {
   const lastServiceDate = svc.lastServiceDate || null;
   const isVip = /vip/i.test(String(acct.Priority_Tier__c || ''));
 
+  const nextVisitDate = ctx.nextVisitDate || null;
+  const dueTier = resolveDueTier({
+    hasUcoHistory,
+    nextDueDate: svc.nextDueDate,
+    daysUntilDue: svc.daysUntilDue,
+    nextVisitDate,
+  });
+  const feedback = ctx.feedback || {};
+  const managerComments = feedback.comments || [];
+  const managerKeepSignal = !!feedback.keepSignal;
+
   const reasonFacts = {
     lastUcoDate: lastServiceDate,
     lastUcoGallons: lastGallons != null && lastGallons !== '' && Number.isFinite(Number(lastGallons))
       ? Number(lastGallons)
       : null,
     nextDueDate: svc.nextDueDate || null,
+    daysUntilDue: svc.daysUntilDue,
     daysOverdue,
     due: !!svc.due,
+    dueTier,
+    dueBeforeNextVisit: dueTier === 'due_before_next_visit',
+    nextVisitDate,
+    routeCadenceDays: ctx.cadenceDays ?? null,
+    cadenceSource: ctx.cadenceSource || null,
+    estimatedGallonsAtDate: svc.estimatedGallonsAtDate,
     hasUcoHistory,
     historyUnavailable,
     mustRemainOnRoute: !!remain.mustRemainOnRoute,
     isFixed: !!stop?.Fixed_point__c,
     isVip,
+    managerKeepSignal,
     dueReason: svc.reason || null,
     remainReasonLabel: remainReasonLabel(remain.remainReason),
   };
@@ -200,8 +261,17 @@ function buildEnhanceStopRow(stop, account, serviceDate) {
     lastServiceDate,
     nextDueDate: svc.nextDueDate || null,
     effectiveFrequencyDays: svc.effectiveFrequencyDays,
+    daysUntilDue: svc.daysUntilDue,
     daysOverdue,
     due: !!svc.due,
+    dueTier,
+    dueBeforeNextVisit: dueTier === 'due_before_next_visit',
+    nextVisitDate,
+    routeCadenceDays: ctx.cadenceDays ?? null,
+    cadenceSource: ctx.cadenceSource || null,
+    estimatedGallonsAtDate: svc.estimatedGallonsAtDate,
+    managerComments,
+    managerKeepSignal,
     dueReason: svc.reason || null,
     hasUcoHistory,
     historyUnavailable,
@@ -261,9 +331,13 @@ function lookupStopFacts(factsByAccountId, accountId) {
 
 /**
  * True when engine facts leave no justification for keeping the stop:
- * serviced history exists, a next due date was computed and it is still ahead,
- * and no remain/fixed/VIP rule applies. A missing nextDueDate means the engine
- * could not resolve a cadence (no_frequency) — a data gap, not a "not due".
+ * serviced history exists, a next due date was computed, it falls after the
+ * route's next visit, and no remain/fixed/VIP/manager rule applies. A missing
+ * nextDueDate means the engine could not resolve a cadence (no_frequency) —
+ * a data gap, not a "not due".
+ *
+ * An account that comes due before the truck returns is deliberately excluded:
+ * removing it guarantees it goes overdue, since there is no trip in between.
  */
 function shouldForceNotDue(facts) {
   if (!facts) return false;
@@ -271,15 +345,18 @@ function shouldForceNotDue(facts) {
     && !!facts.nextDueDate
     && !facts.due
     && !(Number(facts.daysOverdue) > 0)
+    && !facts.dueBeforeNextVisit
+    && !facts.managerKeepSignal
     && !facts.mustRemainOnRoute
     && !facts.isFixed
     && !facts.isVip;
 }
 
 /**
- * Post-AI safety net: force KEEP when history + due/remain/VIP/fixed, force
- * REMOVE when nothing justifies keeping a not-due stop, and rewrite cryptic /
- * false “no history” reasons into plain English.
+ * Post-AI safety net: force KEEP when history + due/due-before-next-visit/
+ * manager override/remain/VIP/fixed, force REMOVE when nothing justifies
+ * keeping a not-due stop, and rewrite cryptic / false “no history” reasons into
+ * plain English.
  */
 function applyServiceHistoryReasonOverride(existingStops = [], factsByAccountId = {}) {
   return existingStops.map((rec) => {
@@ -310,7 +387,8 @@ function applyServiceHistoryReasonOverride(existingStops = [], factsByAccountId 
     }
 
     const forceKeep = facts.hasUcoHistory
-      && (facts.due || facts.mustRemainOnRoute || facts.isFixed || facts.isVip);
+      && (facts.due || facts.dueBeforeNextVisit || facts.managerKeepSignal
+        || facts.mustRemainOnRoute || facts.isFixed || facts.isVip);
 
     let action = String(rec.action || 'flag').toLowerCase();
     if (forceKeep && action !== 'keep' && action !== 'overflow') {
@@ -392,6 +470,8 @@ function stripFieldNames(text) {
 
 module.exports = {
   HISTORY_UNAVAILABLE_REASON,
+  CAPACITY_DEFERRED_WHY,
+  resolveDueTier,
   normalizeSfId,
   indexAccountsById,
   lookupAccount,
@@ -403,6 +483,7 @@ module.exports = {
   deriveWhy,
   buildEnhanceStopRow,
   indexStopFactsByAccountId,
+  lookupStopFacts,
   shouldForceNotDue,
   applyServiceHistoryReasonOverride,
 };

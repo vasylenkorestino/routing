@@ -14,6 +14,7 @@ const {
   looksCrypticReason,
   buildEnhanceStopRow,
   indexStopFactsByAccountId,
+  resolveDueTier,
   shouldForceNotDue,
   applyServiceHistoryReasonOverride,
 } = require('./enhanceStopFacts');
@@ -398,6 +399,143 @@ test('joined account with genuinely empty history still reports no pickups', () 
   assert.equal(row.historyUnavailable, false);
   assert.equal(row.hasUcoHistory, false);
   assert.match(formatManagerReason(row.reasonFacts, 'flag'), /^No UCO pickups on record\./);
+});
+
+/* ── due before the route's next run (Coral Gables Aug 11 route) ───────── */
+
+/** Aug 11 route on a 13-day cadence: the truck is not back until Aug 24. */
+const AUG_11_CTX = { nextVisitDate: '2026-08-24', cadenceDays: 13, cadenceSource: 'route_history' };
+
+/** Builds facts + override input for one stop on the Aug 11 Coral Gables route. */
+function aug11Stop(accountId, account, ctx = AUG_11_CTX) {
+  const row = buildEnhanceStopRow(
+    { Id: `a0R_${accountId}`, AccountId__c: accountId, Account_Name__c: accountId },
+    { Id: accountId, ...account },
+    '2026-08-11',
+    ctx,
+  );
+  const { _remain, ...publicRow } = row;
+  return { row, factsById: indexStopFactsByAccountId([publicRow]) };
+}
+
+test('Brightside Miami: due Aug 14, kept because the truck returns Aug 24', () => {
+  // Real history — 80 gal on Jul 31, on a 2-week cadence.
+  const { row, factsById } = aug11Stop('001BRIGHTSIDE00', {
+    Estimated_Pickup_Frequency__c: '2 Weeks',
+    Tank_Size__c: '140 Gallon',
+    Services__r: services(
+      ['2026-07-31', 80], ['2026-07-21', 60], ['2026-07-13', 80],
+      ['2026-07-02', 80], ['2026-06-23', 80], ['2026-06-09', 80],
+    ),
+  });
+
+  assert.equal(row.due, false, 'not due on the route date itself');
+  assert.equal(row.nextDueDate, '2026-08-14');
+  assert.equal(row.dueTier, 'due_before_next_visit');
+  assert.equal(row.dueBeforeNextVisit, true);
+  assert.equal(row.daysUntilDue, 3);
+  assert.equal(shouldForceNotDue(row.reasonFacts), false);
+
+  const out = applyServiceHistoryReasonOverride(
+    [{
+      accountId: '001BRIGHTSIDE00',
+      action: 'remove',
+      confidence: 88,
+      reason: 'Brightside Miami: Last UCO: Jul 31, 2026 (80 gal). Not due until Aug 14. Remove — not yet due and no protective flag.',
+    }],
+    factsById,
+  );
+
+  assert.equal(out[0].action, 'keep');
+  assert.doesNotMatch(out[0].reason, /not (yet )?due/i);
+  assert.equal(
+    out[0].reason,
+    "Last UCO: Jul 31, 2026 (80 gal). Due Aug 14, 2026 — before this route's next run "
+    + '(~Aug 24, 2026). Keep — comes due before this route returns.',
+  );
+});
+
+test('Pinecrest Bakery F5: due Aug 17, still inside the Aug 24 horizon', () => {
+  const { row } = aug11Stop('001PINECRESTF5', {
+    Estimated_Pickup_Frequency__c: '2 Weeks',
+    Tank_Size__c: '240 Gallon',
+    Services__r: services(
+      ['2026-08-03', 180], ['2026-07-16', 160], ['2026-07-02', 160],
+      ['2026-06-19', 0], ['2026-06-10', 110],
+    ),
+  });
+  assert.equal(row.due, false);
+  assert.equal(row.nextDueDate, '2026-08-17');
+  assert.equal(row.dueTier, 'due_before_next_visit');
+});
+
+test('an account due after the next run is still removed as not due', () => {
+  const { row, factsById } = aug11Stop('001LATE00000000', {
+    Estimated_Pickup_Frequency__c: '8 Weeks',
+    Services__r: services(['2026-08-03', 60], ['2026-06-08', 55], ['2026-04-13', 50]),
+  });
+
+  assert.equal(row.nextDueDate, '2026-09-28');
+  assert.equal(row.dueTier, 'not_due');
+  assert.equal(row.dueBeforeNextVisit, false);
+  assert.equal(shouldForceNotDue(row.reasonFacts), true);
+
+  const out = applyServiceHistoryReasonOverride(
+    [{ accountId: '001LATE00000000', action: 'keep', confidence: 70, reason: 'Strong volume account.' }],
+    factsById,
+  );
+  assert.equal(out[0].action, 'remove');
+  assert.match(out[0].reason, /Remove — not due yet\.$/);
+});
+
+test('without a next-visit horizon the old strict behaviour is unchanged', () => {
+  const { row } = aug11Stop(
+    '001NOCTX0000000',
+    { Services__r: services(['2026-07-31', 80], ['2026-07-17', 80], ['2026-07-03', 80]) },
+    {},
+  );
+  assert.equal(row.nextVisitDate, null);
+  assert.equal(row.dueTier, 'not_due');
+  assert.equal(shouldForceNotDue(row.reasonFacts), true);
+});
+
+test('a manager who declined a removal keeps the stop on the route', () => {
+  const acctId = '001MANAGER00000';
+  const { row, factsById } = aug11Stop(acctId, {
+    Estimated_Pickup_Frequency__c: '8 Weeks',
+    Services__r: services(['2026-08-03', 60], ['2026-06-08', 55], ['2026-04-13', 50]),
+  }, {
+    ...AUG_11_CTX,
+    feedback: {
+      keepSignal: true,
+      comments: [{ author: 'Russell Kamalov', date: '2026-08-10', body: 'they are due this week might as well go' }],
+    },
+  });
+
+  assert.equal(row.dueTier, 'not_due');
+  assert.equal(row.managerKeepSignal, true);
+  assert.equal(row.managerComments.length, 1);
+  assert.equal(shouldForceNotDue(row.reasonFacts), false);
+
+  const out = applyServiceHistoryReasonOverride(
+    [{ accountId: acctId, action: 'remove', confidence: 80, reason: 'Remove — not due yet.' }],
+    factsById,
+  );
+  assert.equal(out[0].action, 'keep');
+  assert.match(out[0].reason, /manager kept this stop previously/);
+});
+
+test('resolveDueTier classifies against the next visit date', () => {
+  const base = { hasUcoHistory: true, nextDueDate: '2026-08-17', nextVisitDate: '2026-08-24' };
+  assert.equal(resolveDueTier({ ...base, daysUntilDue: -3 }), 'overdue');
+  assert.equal(resolveDueTier({ ...base, daysUntilDue: 0 }), 'due_today');
+  assert.equal(resolveDueTier({ ...base, daysUntilDue: 6 }), 'due_before_next_visit');
+  assert.equal(
+    resolveDueTier({ ...base, nextDueDate: '2026-09-30', daysUntilDue: 50 }),
+    'not_due',
+  );
+  assert.equal(resolveDueTier({ hasUcoHistory: false, daysUntilDue: 6 }), 'unknown');
+  assert.equal(resolveDueTier({ hasUcoHistory: true, nextDueDate: null }), 'unknown');
 });
 
 console.log('\nAll enhanceStopFacts tests passed.');

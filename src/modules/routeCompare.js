@@ -1,4 +1,5 @@
 const sf = require('../services/salesforce');
+const { toRunHistory } = require('./routeCadence');
 
 /** SOQL filter for successfully completed routes. */
 const COMPLETED_FILTER = "(CompletionStatus__c = 'Completed' OR Driver_Completed__c = true)";
@@ -9,7 +10,8 @@ const STOP_SUBQUERY =
   'FROM Routes__r WHERE AccountId__c != null ORDER BY Priority__c ASC)';
 
 const ROUTE_FIELDS =
-  'Id, Name, Service_Date__c, CreatedDate, DriverName__c, Total_Distance__c, Total_Time__c, Minutes__c, ' +
+  'Id, Name, Service_Date__c, Last_Route_Serviced_Date__c, CreatedDate, DriverName__c, ' +
+  'Total_Distance__c, Total_Time__c, Minutes__c, ' +
   'Gallons_Collected__c, CompletionStatus__c, Driver_Completed__c';
 
 /** Escapes a string for SOQL single-quoted literals. */
@@ -82,10 +84,11 @@ async function fetchCompletedRoutesByName({ routeName, excludeId, search, date, 
   }
   if (excludeId) where.push(`Id != '${escSoql(excludeId)}'`);
 
+  // Service date order (not CreatedDate) so cadence math reads true chronology.
   const soql =
     `SELECT ${ROUTE_FIELDS}, ${STOP_SUBQUERY} ` +
     `FROM Google_Route__c WHERE ${where.join(' AND ')} ` +
-    `ORDER BY CreatedDate DESC LIMIT ${Math.min(limit, 50)}`;
+    `ORDER BY Service_Date__c DESC LIMIT ${Math.min(limit, 50)}`;
 
   return sf.query(soql);
 }
@@ -185,8 +188,12 @@ function buildHistoricalInsights(currentRoute, historicalRoutes, sections) {
   };
 }
 
-/** Slim payload for LLM / prefetch bundle. */
-function summarizeForAI({ currentRoute, historicalRoutes, sections, insights }) {
+/**
+ * Slim payload for LLM / prefetch bundle.
+ * `includeRunHistory` adds per-run stop membership for cadence math — it is
+ * hundreds of account Ids, so only the enhance pipeline asks for it.
+ */
+function summarizeForAI({ currentRoute, historicalRoutes, sections, insights, includeRunHistory = false }) {
   return {
     currentRoute: {
       id: currentRoute.Id,
@@ -207,14 +214,20 @@ function summarizeForAI({ currentRoute, historicalRoutes, sections, insights }) 
       partial: sections.partial.length,
     },
     insights,
+    // Internal: cadence input for routeCadence. Underscore-prefixed because it
+    // is stripped before this payload is handed to the model.
+    ...(includeRunHistory
+      ? { _runHistory: toRunHistory(historicalRoutes, (r) => getStops(r).map(acctId)) }
+      : {}),
   };
 }
 
 /**
  * Full compare analysis for a route (used by skill, enhance pipeline, prefetch).
- * @param {{ googleRouteId: string, routeName?: string, limit?: number }}
+ * @param {{ googleRouteId: string, routeName?: string, limit?: number,
+ *           includeRunHistory?: boolean }}
  */
-async function analyzeRouteCompare({ googleRouteId, routeName, limit = 20 }) {
+async function analyzeRouteCompare({ googleRouteId, routeName, limit = 20, includeRunHistory = false }) {
   const currentRoute = await loadCurrentRoute(googleRouteId);
   if (!currentRoute) return { error: 'Google Route not found' };
 
@@ -229,7 +242,7 @@ async function analyzeRouteCompare({ googleRouteId, routeName, limit = 20 }) {
   const sections = buildCompareSections(accountIndex, historicalRoutes.length);
   const insights = buildHistoricalInsights(currentRoute, historicalRoutes, sections);
 
-  return summarizeForAI({ currentRoute, historicalRoutes, sections, insights });
+  return summarizeForAI({ currentRoute, historicalRoutes, sections, insights, includeRunHistory });
 }
 
 module.exports = {
